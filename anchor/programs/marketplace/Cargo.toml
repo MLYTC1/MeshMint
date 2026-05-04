@@ -1,12 +1,12 @@
 [package]
-name = "vault"
+name = "marketplace"
 version = "0.1.0"
-description = "A simple SOL vault program"
+description = "A simple SOL marketplace program"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "vault"
+name = "marketplace"
 
 [features]
 default = []
