@@ -23,6 +23,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { useChainAssets, useMarketplaceActions } from "@/hooks/useMarketplace";
 import { formatSendTransactionError } from "@/lib/solana/sendError";
+import { downloadModelFromUrl } from "@/lib/downloadModel";
 
 export const Route = createFileRoute("/asset/$id")({
   head: ({ params }) => ({
@@ -72,6 +73,7 @@ function AssetDetail() {
 
   const [owned, setOwned] = useState(false);
   const [pending, setPending] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [currency, setCurrency] = useState<Currency>("SOL");
 
   useEffect(() => {
@@ -115,6 +117,32 @@ function AssetDetail() {
       });
     } finally {
       setPending(false);
+    }
+  };
+
+  const onDownloadModel = async () => {
+    if (!asset?.modelUrl) {
+      toast.error("No download URL", {
+        description: "This listing has no file URL yet.",
+      });
+      return;
+    }
+    setDownloading(true);
+    try {
+      await downloadModelFromUrl(asset.modelUrl, {
+        title: asset.title,
+        fallbackBase: asset.id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24) || "asset",
+      });
+      toast.success("Download started", {
+        description: "Check your downloads folder.",
+      });
+    } catch (err) {
+      console.error("[asset] download failed", err);
+      toast.error("Download failed", {
+        description: err instanceof Error ? err.message : "Could not save the file.",
+      });
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -228,9 +256,15 @@ function AssetDetail() {
                   <ShieldCheck className="h-4 w-4" />
                   License verified on-chain
                 </div>
-                <Button className="w-full gap-2" size="lg">
+                <Button
+                  type="button"
+                  className="w-full gap-2"
+                  size="lg"
+                  disabled={downloading}
+                  onClick={() => void onDownloadModel()}
+                >
                   <Download className="h-4 w-4" />
-                  Download asset
+                  {downloading ? "Preparing download…" : "Download asset"}
                 </Button>
               </div>
             ) : (
