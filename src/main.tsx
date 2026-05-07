@@ -1,28 +1,32 @@
+// SPA entry — Solana/browser polyfills must run before any wallet adapter import.
 import { Buffer } from "buffer";
-import "./index.css";
 
+const g = globalThis as unknown as Record<string, unknown>;
+if (!g.global) g.global = globalThis;
+if (!g.process) g.process = { env: {} };
+if (!g.Buffer) g.Buffer = Buffer;
 if (typeof window !== "undefined") {
-  (window as typeof window & { Buffer: typeof Buffer }).Buffer = Buffer;
+  const w = window as unknown as Record<string, unknown>;
+  if (!w.Buffer) w.Buffer = Buffer;
 }
 
-(globalThis as typeof globalThis & { Buffer: typeof Buffer }).Buffer = Buffer;
+import React from "react";
+import ReactDOM from "react-dom/client";
+import { RouterProvider } from "@tanstack/react-router";
+import { getRouter } from "./router";
+import "./styles.css";
 
-async function renderApp() {
-  const [{ StrictMode }, { createRoot }, { Providers }, { default: App }] =
-    await Promise.all([
-      import("react"),
-      import("react-dom/client"),
-      import("./providers"),
-      import("./App"),
-    ]);
+const router = getRouter();
 
-  createRoot(document.getElementById("root")!).render(
-    <StrictMode>
-      <Providers>
-        <App />
-      </Providers>
-    </StrictMode>
-  );
+declare module "@tanstack/react-router" {
+  interface Register {
+    router: ReturnType<typeof getRouter>;
+  }
 }
 
-renderApp();
+const rootEl = document.getElementById("root")!;
+ReactDOM.createRoot(rootEl).render(
+  <React.StrictMode>
+    <RouterProvider router={router} />
+  </React.StrictMode>
+);
