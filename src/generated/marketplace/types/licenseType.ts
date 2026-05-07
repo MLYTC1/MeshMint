@@ -18,6 +18,7 @@ import {
 export enum LicenseType {
   Personal,
   Commercial,
+  Extended,
 }
 
 export type LicenseTypeArgs = LicenseType;

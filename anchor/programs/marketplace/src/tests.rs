@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::ID as PROGRAM_ID;
+    use crate::{ID as PROGRAM_ID, PLATFORM_FEE_BPS, TREASURY_PUBKEY};
     use litesvm::LiteSVM;
     use solana_sdk::{
         instruction::{AccountMeta, Instruction},
@@ -36,7 +36,7 @@ mod tests {
         asset_pda: &Pubkey,
         asset_id: &str,
         price: u64,
-        license_type: u8, // 0 = Personal, 1 = Commercial
+        license_type: u8, // 0 = Personal, 1 = Commercial, 2 = Extended
     ) -> Instruction {
         // Anchor discriminator: sha256("global:create_asset")[0..8]
         let discriminator: [u8; 8] = [28, 42, 120, 51, 7, 38, 156, 136];
@@ -78,6 +78,7 @@ mod tests {
             accounts: vec![
                 AccountMeta::new(*buyer, true),
                 AccountMeta::new(*creator, false),
+                AccountMeta::new(TREASURY_PUBKEY, false),
                 AccountMeta::new_readonly(*asset_pda, false),
                 AccountMeta::new(*purchase_pda, false),
                 AccountMeta::new_readonly(system_program::ID, false),
@@ -108,7 +109,7 @@ mod tests {
     // --- Tests ---
 
     #[test]
-    fn test_create_asset() {
+    fn test_create_asset_personal() {
         let mut svm = LiteSVM::new();
         let program_bytes = include_bytes!("../../../target/deploy/marketplace.so");
         svm.add_program(PROGRAM_ID, program_bytes);
@@ -120,7 +121,13 @@ mod tests {
         let price = 500_000_000u64; // 0.5 SOL
         let (asset_pda, _) = get_asset_pda(&creator.pubkey(), asset_id);
 
-        let ix = create_asset_ix(&creator.pubkey(), &asset_pda, asset_id, price, 0);
+        let ix = create_asset_ix(
+            &creator.pubkey(),
+            &asset_pda,
+            asset_id,
+                        price,
+            0, // Personal
+        );
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[ix],
@@ -132,13 +139,48 @@ mod tests {
         let result = svm.send_transaction(tx);
         assert!(result.is_ok(), "create_asset should succeed: {:?}", result);
 
-        // Asset account should exist
         let asset_account = svm.get_account(&asset_pda);
         assert!(asset_account.is_some(), "Asset PDA should exist");
     }
 
     #[test]
-    fn test_purchase_asset() {
+    fn test_create_asset_extended() {
+        let mut svm = LiteSVM::new();
+        let program_bytes = include_bytes!("../../../target/deploy/marketplace.so");
+        svm.add_program(PROGRAM_ID, program_bytes);
+
+        let creator = Keypair::new();
+        svm.airdrop(&creator.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+
+        let asset_id = "asset-ext-1";
+        let price = 1_000_000_000u64; // 1 SOL
+        let (asset_pda, _) = get_asset_pda(&creator.pubkey(), asset_id);
+
+        let ix = create_asset_ix(
+            &creator.pubkey(),
+            &asset_pda,
+            asset_id,
+                        price,
+            2, // Extended
+        );
+        let blockhash = svm.latest_blockhash();
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&creator.pubkey()),
+            &[&creator],
+            blockhash,
+        );
+
+        let result = svm.send_transaction(tx);
+        assert!(
+            result.is_ok(),
+            "create_asset (Extended) should succeed: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_purchase_splits_fee_to_treasury() {
         let mut svm = LiteSVM::new();
         let program_bytes = include_bytes!("../../../target/deploy/marketplace.so");
         svm.add_program(PROGRAM_ID, program_bytes);
@@ -147,14 +189,21 @@ mod tests {
         let buyer = Keypair::new();
         svm.airdrop(&creator.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&buyer.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+        // Treasury must be a system account; airdrop a tiny amount to make it exist.
+        svm.airdrop(&TREASURY_PUBKEY, 1).unwrap();
 
         let asset_id = "asset-002";
-        let price = 500_000_000u64;
+        let price = 1_000_000_000u64; // 1 SOL
         let (asset_pda, _) = get_asset_pda(&creator.pubkey(), asset_id);
         let (purchase_pda, _) = get_purchase_pda(&buyer.pubkey(), &asset_pda);
 
-        // Creator lists asset
-        let create_ix = create_asset_ix(&creator.pubkey(), &asset_pda, asset_id, price, 1);
+        let create_ix = create_asset_ix(
+            &creator.pubkey(),
+            &asset_pda,
+            asset_id,
+                        price,
+            1, // Commercial
+        );
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[create_ix],
@@ -165,8 +214,11 @@ mod tests {
         svm.send_transaction(tx).unwrap();
 
         let creator_balance_before = svm.get_account(&creator.pubkey()).unwrap().lamports;
+        let treasury_balance_before = svm
+            .get_account(&TREASURY_PUBKEY)
+            .map(|a| a.lamports)
+            .unwrap_or(0);
 
-        // Buyer purchases
         let purchase_ix = purchase_asset_ix(
             &buyer.pubkey(),
             &creator.pubkey(),
@@ -184,13 +236,25 @@ mod tests {
         let result = svm.send_transaction(tx);
         assert!(result.is_ok(), "purchase_asset should succeed: {:?}", result);
 
-        // Purchase PDA should exist
         let purchase_account = svm.get_account(&purchase_pda);
         assert!(purchase_account.is_some(), "Purchase PDA should exist");
 
-        // Creator should have received payment
+        let expected_fee = price * PLATFORM_FEE_BPS / 10_000;
+        let expected_creator = price - expected_fee;
+
         let creator_balance_after = svm.get_account(&creator.pubkey()).unwrap().lamports;
-        assert_eq!(creator_balance_after, creator_balance_before + price);
+        let treasury_balance_after = svm.get_account(&TREASURY_PUBKEY).unwrap().lamports;
+
+        assert_eq!(
+            creator_balance_after - creator_balance_before,
+            expected_creator,
+            "creator should receive 95%"
+        );
+        assert_eq!(
+            treasury_balance_after - treasury_balance_before,
+            expected_fee,
+            "treasury should receive 5%"
+        );
     }
 
     #[test]
@@ -203,14 +267,20 @@ mod tests {
         let buyer = Keypair::new();
         svm.airdrop(&creator.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&buyer.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&TREASURY_PUBKEY, 1).unwrap();
 
         let asset_id = "asset-003";
         let price = 100_000_000u64;
         let (asset_pda, _) = get_asset_pda(&creator.pubkey(), asset_id);
         let (purchase_pda, _) = get_purchase_pda(&buyer.pubkey(), &asset_pda);
 
-        // Create asset
-        let create_ix = create_asset_ix(&creator.pubkey(), &asset_pda, asset_id, price, 0);
+        let create_ix = create_asset_ix(
+            &creator.pubkey(),
+            &asset_pda,
+            asset_id,
+                        price,
+            0,
+        );
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[create_ix],
@@ -220,7 +290,6 @@ mod tests {
         );
         svm.send_transaction(tx).unwrap();
 
-        // Purchase
         let purchase_ix = purchase_asset_ix(
             &buyer.pubkey(),
             &creator.pubkey(),
@@ -236,7 +305,6 @@ mod tests {
         );
         svm.send_transaction(tx).unwrap();
 
-        // Verify license
         let verify_ix = verify_license_ix(&buyer.pubkey(), &asset_pda, &purchase_pda);
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
@@ -260,14 +328,20 @@ mod tests {
         let buyer = Keypair::new();
         svm.airdrop(&creator.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
         svm.airdrop(&buyer.pubkey(), 10 * LAMPORTS_PER_SOL).unwrap();
+        svm.airdrop(&TREASURY_PUBKEY, 1).unwrap();
 
         let asset_id = "asset-004";
         let price = 100_000_000u64;
         let (asset_pda, _) = get_asset_pda(&creator.pubkey(), asset_id);
         let (purchase_pda, _) = get_purchase_pda(&buyer.pubkey(), &asset_pda);
 
-        // Create asset
-        let create_ix = create_asset_ix(&creator.pubkey(), &asset_pda, asset_id, price, 0);
+        let create_ix = create_asset_ix(
+            &creator.pubkey(),
+            &asset_pda,
+            asset_id,
+                        price,
+            0,
+        );
         let blockhash = svm.latest_blockhash();
         let tx = Transaction::new_signed_with_payer(
             &[create_ix],
@@ -277,7 +351,6 @@ mod tests {
         );
         svm.send_transaction(tx).unwrap();
 
-        // First purchase
         let purchase_ix = purchase_asset_ix(
             &buyer.pubkey(),
             &creator.pubkey(),
@@ -293,7 +366,6 @@ mod tests {
         );
         svm.send_transaction(tx).unwrap();
 
-        // Second purchase should fail (PDA already exists)
         let purchase_ix2 = purchase_asset_ix(
             &buyer.pubkey(),
             &creator.pubkey(),

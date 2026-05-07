@@ -14,26 +14,37 @@ import {
 } from "@/components/ui/select";
 import { ModelViewer } from "@/components/solana/ModelViewer";
 import { useWalletConnection } from "@solana/react-hooks";
-import { useMeshProgram } from "@/hooks/useMeshProgram";
-import { addAsset } from "@/lib/services/marketplace";
-import type { Currency, LicenseType, MeshAsset } from "@/types/mesh";
+import { useMarketplaceActions, useChainAssets } from "@/hooks/useMarketplace";
+import { setAssetMetadata } from "@/lib/services/marketplace";
+import type { Currency, LicenseType } from "@/types/mesh";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Upload, Sparkles } from "lucide-react";
-
-function shortWallet(addr: string) {
-  return `${addr.slice(0, 4)}…${addr.slice(-4)}`;
-}
+import { formatSendTransactionError } from "@/lib/solana/sendError";
 
 export const Route = createFileRoute("/upload")({
   head: () => ({ meta: [{ title: "Create listing — Mesh Mint" }] }),
   component: UploadPage,
 });
 
+function makeAssetId(title: string): string {
+  // 12-char rand suffix keeps PDA-uniqueness even when titles collide.
+  const slug = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 32);
+  const rand = Math.random().toString(36).slice(2, 10);
+  const suffix = `${Date.now().toString(36)}-${rand}`;
+  return slug ? `${slug}-${suffix}` : `asset-${suffix}`;
+}
+
 function UploadPage() {
   const { wallet, connect, connectors, status } = useWalletConnection();
   const walletAddress = wallet?.account.address.toString();
-  const program = useMeshProgram();
+  const actions = useMarketplaceActions();
+  const chain = useChainAssets();
   const navigate = useNavigate();
 
   const [modelUrl, setModelUrl] = useState<string | null>(null);
@@ -68,48 +79,52 @@ function UploadPage() {
       toast.error("Upload a 3D file first");
       return;
     }
+    if (!actions) {
+      toast.error("Wallet session not ready");
+      return;
+    }
+
     setSubmitting(true);
     try {
-      if (!program) {
-        throw new Error("Wallet transaction signer is unavailable");
+      const numericPrice = Number(price) || 0;
+      // Convert USDC -> approx SOL at a fixed devnet ratio (130 USD/SOL).
+      // The on-chain program only handles SOL; this is a UX-level conversion.
+      const priceSol = currency === "SOL" ? numericPrice : numericPrice / 130;
+      if (priceSol <= 0) {
+        throw new Error("Price must be greater than 0");
       }
 
-      const numericPrice = Number(price) || 0;
-      const assetId = `asset-${Date.now()}`;
-      await program.createListing({
+      const assetId = makeAssetId(title);
+
+      // Save off-chain metadata BEFORE sending the tx so even if we navigate
+      // away mid-confirmation, the chain refetch will resolve the metadata.
+      setAssetMetadata(assetId, {
+        title: title.trim() || "Untitled asset",
+        description: description.trim() || "Newly minted Mesh Mint asset.",
+        modelUrl,
+        currency,
+        priceUsdc: currency === "USDC" ? numericPrice : numericPrice * 130,
+        tags: ["new", license],
+        fileSizeMb,
+      });
+
+      const signature = await actions.createAsset({
         assetId,
-        priceSol: currency === "SOL" ? numericPrice : numericPrice / 130,
+        priceSol,
         license,
       });
 
-      const asset: MeshAsset = {
-        id: assetId,
-        title: title.trim() || "Untitled asset",
-        description: description.trim() || "Newly minted Mesh Mint asset.",
-        creator: {
-          wallet: walletAddress,
-          handle: shortWallet(walletAddress),
-          reputation: 0,
-        },
-        modelUrl,
-        priceSol: currency === "SOL" ? numericPrice : numericPrice / 130,
-        priceUsdc: currency === "USDC" ? numericPrice : numericPrice * 130,
-        currency,
-        license,
-        tags: ["new", license],
-        fileSizeMb,
-        createdAt: new Date().toISOString().slice(0, 10),
-        mintAddress: `mint-${Math.random().toString(36).slice(2, 10)}`,
-      };
-      addAsset(asset);
+      // Refetch chain data so the marketplace shows the new listing.
+      void chain.refresh();
 
-      toast.success("Listing published", {
-        description: "Your asset is now live on Mesh Mint.",
+      toast.success("Listing published on-chain", {
+        description: `Signature ${signature.slice(0, 10)}…`,
       });
       navigate({ to: "/marketplace" });
     } catch (err) {
+      console.error("[upload] mint failed", err);
       toast.error("Failed to publish listing", {
-        description: err instanceof Error ? err.message : "Unknown error",
+        description: formatSendTransactionError(err),
       });
     } finally {
       setSubmitting(false);
@@ -245,7 +260,8 @@ function UploadPage() {
                   : "Connect wallet"}
           </Button>
           <p className="text-center text-xs text-muted-foreground">
-            A license NFT is minted on-chain via your Mesh Mint Anchor program.
+            Settled on-chain via your Mesh Mint marketplace program. 5% fee to
+            treasury, 95% to creator.
           </p>
         </Card>
       </form>

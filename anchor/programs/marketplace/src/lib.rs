@@ -1,71 +1,122 @@
-use anchor_lang::prelude::*; // imports all core Anchor types: Account, Pubkey, Result, etc.
-use anchor_lang::system_program::{transfer, Transfer}; // imports SOL transfer CPI helpers
+use anchor_lang::prelude::*;
+use anchor_lang::system_program::{transfer, Transfer};
 
-#[cfg(test)] // only compile this module when running tests
-mod tests; // loads tests.rs as a submodule
+#[cfg(test)]
+mod tests;
 
-declare_id!("HtQwAN1WeyKCrLkadB3rTNxZt7hmVkGB797Njz1m19xg"); // hardcodes the program's on-chain address
+declare_id!("3z9VVHRqRW8ywzy2mtkpmDAGMjqgGkz8iz1dtXGs75xH");
 
-#[program] // marks this module as the Anchor program — all public fns become instructions
+// --- Marketplace constants ----------------------------------------------------
+
+/// Hardcoded treasury wallet (devnet). Receives the platform fee.
+/// Replace with the production treasury before mainnet.
+pub const TREASURY_PUBKEY: Pubkey =
+    pubkey!("AAaJbDC4HsLyHb59iFovqgAZpe39WDHnE9DRdUXErxEY");
+
+/// Platform fee in basis points (5% = 500 bps).
+pub const PLATFORM_FEE_BPS: u64 = 500;
+
+/// Maximum on-chain length for the asset_id (string).
+/// The `asset_id` is also the off-chain metadata pointer (e.g. an IPFS CID or
+/// short URL): binary 3D content is NEVER stored on chain.
+pub const MAX_ASSET_ID_LEN: usize = 96;
+
+#[program]
 pub mod marketplace {
-    use super::*; // bring parent scope (accounts, types, errors) into this module
+    use super::*;
 
+    /// Create a new asset listing.
+    ///
+    /// `asset_id`     — unique identifier AND off-chain metadata pointer
+    ///                  (IPFS CID, https URL, or short slug). Binary content
+    ///                  (3D models, textures) is NEVER stored on chain — only
+    ///                  this pointer.
+    /// `price`        — price in lamports (must be > 0).
+    /// `license_type` — Personal / Commercial / Extended.
     pub fn create_asset(
-        ctx: Context<CreateAsset>, // Context holds all validated accounts for this instruction
-        asset_id: String,          // unique identifier for the asset (e.g. filename or UUID)
-        price: u64,                // price in lamports (1 SOL = 1_000_000_000 lamports)
-        license_type: LicenseType, // enum: Personal or Commercial
+        ctx: Context<CreateAsset>,
+        asset_id: String,
+        price: u64,
+        license_type: LicenseType,
     ) -> Result<()> {
-        require!(price > 0, MarketplaceError::InvalidPrice); // reject zero-price assets
-        require!(asset_id.len() <= 64, MarketplaceError::AssetIdTooLong); // enforce max ID length
+        require!(price > 0, MarketplaceError::InvalidPrice);
+        require!(!asset_id.is_empty(), MarketplaceError::AssetIdTooShort);
+        require!(
+            asset_id.len() <= MAX_ASSET_ID_LEN,
+            MarketplaceError::AssetIdTooLong
+        );
 
-        let asset = &mut ctx.accounts.asset; // get mutable reference to the Asset PDA account
-        asset.creator = ctx.accounts.creator.key(); // store creator's wallet address
-        asset.asset_id = asset_id;                  // store the asset identifier
-        asset.price = price;                         // store the price
-        asset.license_type = license_type;           // store Personal or Commercial
-        asset.bump = ctx.bumps.asset;                // store PDA bump seed for future signing
+        let asset = &mut ctx.accounts.asset;
+        asset.creator = ctx.accounts.creator.key();
+        asset.asset_id = asset_id;
+        asset.price = price;
+        asset.license_type = license_type;
+        asset.created_at = Clock::get()?.unix_timestamp;
+        asset.bump = ctx.bumps.asset;
 
         Ok(())
     }
 
+    /// Purchase an asset license. Splits the price between the creator (95%)
+    /// and the platform treasury (5%), and mints a Purchase PDA proof.
     pub fn purchase_asset(ctx: Context<PurchaseAsset>) -> Result<()> {
-        let asset = &ctx.accounts.asset; // read the asset being purchased
+        let asset = &ctx.accounts.asset;
 
-        // Transfer SOL from buyer to creator using a Cross-Program Invocation (CPI) to System Program
-        transfer(
-            CpiContext::new(
-                ctx.accounts.system_program.to_account_info(), // System Program handles SOL transfers
-                Transfer {
-                    from: ctx.accounts.buyer.to_account_info(),   // deduct from buyer's wallet
-                    to: ctx.accounts.creator.to_account_info(),   // send to creator's wallet
-                },
-            ),
-            asset.price, // amount to transfer in lamports
-        )?; // the ? propagates any error up
+        let (creator_amount, treasury_amount) = split_fee(asset.price)?;
 
-        // Create the Purchase PDA — this acts as the on-chain license proof
+        // 95% (or remainder) to creator
+        if creator_amount > 0 {
+            transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.buyer.to_account_info(),
+                        to: ctx.accounts.creator.to_account_info(),
+                    },
+                ),
+                creator_amount,
+            )?;
+        }
+
+        // 5% platform fee to treasury
+        if treasury_amount > 0 {
+            transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    Transfer {
+                        from: ctx.accounts.buyer.to_account_info(),
+                        to: ctx.accounts.treasury.to_account_info(),
+                    },
+                ),
+                treasury_amount,
+            )?;
+        }
+
+        // Mint the Purchase PDA = on-chain license proof
         let purchase = &mut ctx.accounts.purchase;
-        purchase.buyer = ctx.accounts.buyer.key();       // record who bought it
-        purchase.asset = ctx.accounts.asset.key();       // record which asset was bought
-        purchase.license_type = asset.license_type.clone(); // copy license type from asset
-        purchase.purchased_at = Clock::get()?.unix_timestamp; // record current blockchain timestamp
-        purchase.bump = ctx.bumps.purchase;              // store bump seed for future verification
+        purchase.buyer = ctx.accounts.buyer.key();
+        purchase.asset = ctx.accounts.asset.key();
+        purchase.license_type = asset.license_type.clone();
+        purchase.price_paid = asset.price;
+        purchase.purchased_at = Clock::get()?.unix_timestamp;
+        purchase.bump = ctx.bumps.purchase;
 
         Ok(())
     }
 
+    /// Verify that the given buyer holds a valid license PDA for the asset.
     pub fn verify_license(ctx: Context<VerifyLicense>) -> Result<()> {
-        // If this instruction succeeds at all, the Purchase PDA exists and seeds are valid
-        // Anchor already checked the PDA seeds before we get here — so existence = valid license
         let purchase = &ctx.accounts.purchase;
 
         require!(
-            purchase.buyer == ctx.accounts.buyer.key(), // confirm PDA belongs to this exact buyer
+            purchase.buyer == ctx.accounts.buyer.key(),
+            MarketplaceError::Unauthorized
+        );
+        require!(
+            purchase.asset == ctx.accounts.asset.key(),
             MarketplaceError::Unauthorized
         );
 
-        // Log verification result to the transaction logs (visible on explorers)
         msg!(
             "License verified: buyer={} asset={} type={:?}",
             purchase.buyer,
@@ -77,121 +128,148 @@ pub mod marketplace {
     }
 }
 
-// ----------------------------------------------------------------
-// Account structs — define what data is stored in each on-chain account
-// ----------------------------------------------------------------
+// --- Helpers -----------------------------------------------------------------
 
-#[account] // marks this as an Anchor-managed on-chain account
+/// Split a price between the platform treasury and the creator.
+/// Treasury gets PLATFORM_FEE_BPS / 10_000, creator gets the remainder.
+/// Uses u128 internally to avoid overflow on large prices.
+fn split_fee(price: u64) -> Result<(u64, u64)> {
+    let treasury_amount = (price as u128)
+        .checked_mul(PLATFORM_FEE_BPS as u128)
+        .ok_or(MarketplaceError::FeeMathOverflow)?
+        .checked_div(10_000u128)
+        .ok_or(MarketplaceError::FeeMathOverflow)? as u64;
+    let creator_amount = price
+        .checked_sub(treasury_amount)
+        .ok_or(MarketplaceError::FeeMathOverflow)?;
+    Ok((creator_amount, treasury_amount))
+}
+
+// --- Account structs ---------------------------------------------------------
+
+#[account]
 pub struct Asset {
-    pub creator: Pubkey,           // 32 bytes — wallet address of the creator
-    pub asset_id: String,          // 4 bytes (length prefix) + up to 64 bytes
-    pub price: u64,                // 8 bytes — price in lamports
-    pub license_type: LicenseType, // 1 byte — Personal or Commercial enum variant
-    pub bump: u8,                  // 1 byte — PDA bump seed
+    pub creator: Pubkey,           // 32
+    pub asset_id: String,          // 4 + MAX_ASSET_ID_LEN
+    pub price: u64,                // 8
+    pub license_type: LicenseType, // 1
+    pub created_at: i64,           // 8
+    pub bump: u8,                  // 1
 }
 
 impl Asset {
-    // total space to allocate: 8 (Anchor discriminator) + all fields
-    pub const LEN: usize = 8 + 32 + (4 + 64) + 8 + 1 + 1;
+    pub const LEN: usize = 8 + 32 + (4 + MAX_ASSET_ID_LEN) + 8 + 1 + 8 + 1;
 }
 
 #[account]
 pub struct Purchase {
-    pub buyer: Pubkey,             // 32 bytes — wallet that purchased the license
-    pub asset: Pubkey,             // 32 bytes — the Asset PDA that was purchased
-    pub license_type: LicenseType, // 1 byte — license type inherited from asset
-    pub purchased_at: i64,         // 8 bytes — unix timestamp of purchase
-    pub bump: u8,                  // 1 byte — PDA bump seed
+    pub buyer: Pubkey,             // 32
+    pub asset: Pubkey,             // 32
+    pub license_type: LicenseType, // 1
+    pub price_paid: u64,           // 8
+    pub purchased_at: i64,         // 8
+    pub bump: u8,                  // 1
 }
 
 impl Purchase {
-    pub const LEN: usize = 8 + 32 + 32 + 1 + 8 + 1;
+    pub const LEN: usize = 8 + 32 + 32 + 1 + 8 + 8 + 1;
 }
 
-// ----------------------------------------------------------------
-// Instruction contexts — define which accounts each instruction requires
-// ----------------------------------------------------------------
+// --- Instruction contexts ----------------------------------------------------
 
 #[derive(Accounts)]
-#[instruction(asset_id: String)] // exposes asset_id to the account constraints below
+#[instruction(asset_id: String)]
 pub struct CreateAsset<'info> {
-    #[account(mut)] // mut because creator pays for account rent (lamports deducted)
-    pub creator: Signer<'info>, // must sign the transaction
+    #[account(mut)]
+    pub creator: Signer<'info>,
 
     #[account(
-        init,                  // create this account for the first time
-        payer = creator,       // creator pays the rent-exempt deposit
-        space = Asset::LEN,    // allocate exactly this many bytes
-        seeds = [b"asset", creator.key().as_ref(), asset_id.as_bytes()], // PDA seeds: "asset" + creator pubkey + asset_id
-        bump,                  // Anchor finds and stores the canonical bump
+        init,
+        payer = creator,
+        space = Asset::LEN,
+        seeds = [b"asset", creator.key().as_ref(), asset_id.as_bytes()],
+        bump,
     )]
-    pub asset: Account<'info, Asset>, // the new Asset account to be created
+    pub asset: Account<'info, Asset>,
 
-    pub system_program: Program<'info, System>, // required for account creation and SOL transfers
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct PurchaseAsset<'info> {
-    #[account(mut)] // mut because lamports are deducted from buyer
-    pub buyer: Signer<'info>, // must sign the transaction
+    #[account(mut)]
+    pub buyer: Signer<'info>,
 
-    #[account(mut)] // mut because lamports are added to creator
-    pub creator: SystemAccount<'info>, // creator's wallet (doesn't need to sign)
+    #[account(mut)]
+    pub creator: SystemAccount<'info>,
 
     #[account(
-        seeds = [b"asset", creator.key().as_ref(), asset.asset_id.as_bytes()], // derive asset PDA
-        bump = asset.bump,     // use stored bump to verify PDA
-        has_one = creator,     // ensures asset.creator matches the creator account passed in
+        mut,
+        address = TREASURY_PUBKEY @ MarketplaceError::InvalidTreasury,
     )]
-    pub asset: Account<'info, Asset>, // the existing asset being purchased
+    pub treasury: SystemAccount<'info>,
 
     #[account(
-        init,                  // create purchase record for the first time
-        payer = buyer,         // buyer pays rent for the purchase account
+        seeds = [b"asset", creator.key().as_ref(), asset.asset_id.as_bytes()],
+        bump = asset.bump,
+        has_one = creator,
+    )]
+    pub asset: Account<'info, Asset>,
+
+    #[account(
+        init,
+        payer = buyer,
         space = Purchase::LEN,
-        seeds = [b"purchase", buyer.key().as_ref(), asset.key().as_ref()], // unique per buyer+asset pair
+        seeds = [b"purchase", buyer.key().as_ref(), asset.key().as_ref()],
         bump,
     )]
-    pub purchase: Account<'info, Purchase>, // the new license proof account
+    pub purchase: Account<'info, Purchase>,
 
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
 pub struct VerifyLicense<'info> {
-    pub buyer: SystemAccount<'info>, // wallet to verify license for (doesn't need to sign)
+    pub buyer: SystemAccount<'info>,
 
-    pub asset: Account<'info, Asset>, // the asset to check license against
+    pub asset: Account<'info, Asset>,
 
     #[account(
-        seeds = [b"purchase", buyer.key().as_ref(), asset.key().as_ref()], // must match exact buyer+asset
-        bump = purchase.bump,  // verify with stored bump — if PDA doesn't exist, instruction fails here
+        seeds = [b"purchase", buyer.key().as_ref(), asset.key().as_ref()],
+        bump = purchase.bump,
     )]
-    pub purchase: Account<'info, Purchase>, // the license proof — its existence proves ownership
+    pub purchase: Account<'info, Purchase>,
 }
 
-// ----------------------------------------------------------------
-// Types & errors
-// ----------------------------------------------------------------
+// --- Types & errors ----------------------------------------------------------
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, PartialEq)]
-// AnchorSerialize/Deserialize: can be stored on-chain and read back
-// Clone: can be copied (needed when assigning license_type from asset to purchase)
-// Debug: enables {:?} formatting in msg!()
-// PartialEq: enables == comparisons
 pub enum LicenseType {
-    Personal,   // variant 0 — stored as 0u8 on-chain
-    Commercial, // variant 1 — stored as 1u8 on-chain
+    /// Personal use only — no commercial rights, no resale.
+    Personal,
+    /// Commercial use allowed — no resale.
+    Commercial,
+    /// Commercial + resellable / sublicensable.
+    Extended,
 }
 
-#[error_code] // generates error codes starting at 6000 (Anchor convention)
+#[error_code]
 pub enum MarketplaceError {
     #[msg("Price must be greater than zero")]
-    InvalidPrice,    // thrown when price == 0
+    InvalidPrice,
 
-    #[msg("Asset ID must be 64 characters or less")]
-    AssetIdTooLong,  // thrown when asset_id.len() > 64
+    #[msg("Asset ID must not be empty")]
+    AssetIdTooShort,
+
+    #[msg("Asset ID exceeds maximum length")]
+    AssetIdTooLong,
 
     #[msg("Buyer does not own a license for this asset")]
-    Unauthorized,    // thrown when purchase.buyer != provided buyer pubkey
+    Unauthorized,
+
+    #[msg("Treasury account does not match the program treasury")]
+    InvalidTreasury,
+
+    #[msg("Fee math overflow")]
+    FeeMathOverflow,
 }

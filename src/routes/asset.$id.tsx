@@ -1,5 +1,8 @@
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { getAsset } from "@/lib/services/marketplace";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import {
+  getDemoAsset,
+  chainAssetToMeshAsset,
+} from "@/lib/services/marketplace";
 import type { MeshAsset, Currency } from "@/types/mesh";
 import { ModelViewer } from "@/components/solana/ModelViewer";
 import { Button } from "@/components/ui/button";
@@ -17,61 +20,125 @@ import {
   Box,
   HardDrive,
 } from "lucide-react";
-import { useState } from "react";
-import { useMeshProgram } from "@/hooks/useMeshProgram";
+import { useEffect, useMemo, useState } from "react";
+import { useChainAssets, useMarketplaceActions } from "@/hooks/useMarketplace";
+import { formatSendTransactionError } from "@/lib/solana/sendError";
 
 export const Route = createFileRoute("/asset/$id")({
-  loader: async ({ params }) => {
-    const asset = await getAsset(params.id);
-    if (!asset) throw notFound();
-    return { asset };
-  },
-  head: ({ loaderData }) => ({
-    meta: [
-      { title: `${loaderData?.asset.title ?? "Asset"} — Mesh Mint` },
-      {
-        name: "description",
-        content: loaderData?.asset.description ?? "Mesh Mint asset",
-      },
-    ],
+  head: ({ params }) => ({
+    meta: [{ title: `Asset ${params.id} — Mesh Mint` }],
   }),
   component: AssetDetail,
 });
 
 function AssetDetail() {
-  const { asset } = Route.useLoaderData() as { asset: MeshAsset };
+  const { id } = Route.useParams();
   const { wallet, connect, connectors, status } = useWalletConnection();
   const walletAddress = wallet?.account.address.toString();
-  const program = useMeshProgram();
+  const actions = useMarketplaceActions();
+  const chain = useChainAssets();
+
+  const [demoAsset, setDemoAsset] = useState<MeshAsset | null>(null);
+  const [loadingDemo, setLoadingDemo] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingDemo(true);
+    getDemoAsset(id).then((a) => {
+      if (cancelled) return;
+      setDemoAsset(a ?? null);
+      setLoadingDemo(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  const asset = useMemo<MeshAsset | null>(() => {
+    // Prefer real chain data — match by PDA address (the canonical UI id).
+    const chainHit = chain.assets.find((a) => a.address.toString() === id);
+    if (chainHit) {
+      return chainAssetToMeshAsset({
+        address: chainHit.address.toString(),
+        creator: chainHit.creator.toString(),
+        assetId: chainHit.assetId,
+        priceSol: chainHit.priceSol,
+        license: chainHit.license,
+        createdAtUnix: chainHit.createdAtUnix,
+      });
+    }
+    return demoAsset;
+  }, [chain.assets, demoAsset, id]);
+
   const [owned, setOwned] = useState(false);
   const [pending, setPending] = useState(false);
-  const [currency, setCurrency] = useState<Currency>(asset.currency);
+  const [currency, setCurrency] = useState<Currency>("SOL");
+
+  useEffect(() => {
+    if (asset) setCurrency(asset.currency);
+  }, [asset]);
 
   const onPurchase = async () => {
+    if (!asset) return;
     if (!walletAddress) {
-      if (connectors[0]) {
-        await connect(connectors[0].id);
-      }
+      if (connectors[0]) await connect(connectors[0].id);
       return;
     }
+    if (!actions) {
+      toast.error("Wallet session not ready");
+      return;
+    }
+
+    // Demo assets aren't on-chain; surface a clear message instead of crashing.
+    const chainHit = chain.assets.find((a) => a.address.toString() === id);
+    if (!chainHit) {
+      toast.error("Demo asset", {
+        description: "This is curated demo content — not yet minted on-chain.",
+      });
+      return;
+    }
+
     setPending(true);
     try {
-      if (!program) {
-        throw new Error("Wallet transaction signer is unavailable");
-      }
-      await program.purchaseLicense({ assetId: asset.id });
+      const signature = await actions.purchaseAsset({
+        assetId: chainHit.assetId,
+        creator: chainHit.creator.toString(),
+      });
       setOwned(true);
       toast.success(`License acquired for ${asset.title}`, {
-        description: "On-chain verification complete.",
+        description: `Signature ${signature.slice(0, 10)}…`,
       });
     } catch (err) {
+      console.error("[asset] purchase failed", err);
       toast.error("Purchase failed", {
-        description: err instanceof Error ? err.message : "Unknown error",
+        description: formatSendTransactionError(err),
       });
     } finally {
       setPending(false);
     }
   };
+
+  if (loadingDemo && chain.isLoading) {
+    return (
+      <div className="mx-auto max-w-md px-6 py-32 text-center text-muted-foreground">
+        Loading asset…
+      </div>
+    );
+  }
+
+  if (!asset) {
+    return (
+      <div className="mx-auto max-w-md px-6 py-32 text-center">
+        <h1 className="text-2xl font-semibold">Asset not found</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          That asset isn't in the mesh.
+        </p>
+        <Button asChild className="mt-6 shadow-glow">
+          <Link to="/marketplace">Back to marketplace</Link>
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6">
@@ -98,7 +165,7 @@ function AssetDetail() {
               <Stat
                 icon={HardDrive}
                 label="File size"
-                value={`${asset.fileSizeMb} MB`}
+                value={asset.fileSizeMb ? `${asset.fileSizeMb} MB` : "—"}
               />
               <Stat icon={Sparkles} label="Listed" value={asset.createdAt} />
             </div>
@@ -184,7 +251,7 @@ function AssetDetail() {
             )}
 
             <p className="mt-4 text-center text-xs text-muted-foreground">
-              Settled on Solana · Verified by Mesh Mint program
+              Settled on Solana · 5% to treasury · 95% to creator
             </p>
           </Card>
 

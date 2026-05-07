@@ -10,14 +10,15 @@ export const SOLANA_CLUSTER: Cluster =
 export const SOLANA_RPC_URL: string =
   import.meta.env.VITE_SOLANA_RPC_URL || clusterApiUrl(SOLANA_CLUSTER);
 
-/** Anchor program ID for the Mesh Mint marketplace program. Replace with your deployed ID. */
+/** Anchor program ID for the Mesh Mint marketplace program (matches anchor/Anchor.toml). */
 export const MESH_MINT_PROGRAM_ID: string =
   import.meta.env.VITE_MESH_MINT_PROGRAM_ID ||
-  "11111111111111111111111111111111";
+  "3z9VVHRqRW8ywzy2mtkpmDAGMjqgGkz8iz1dtXGs75xH";
 
-/** Treasury / fee recipient wallet. */
+/** Treasury / fee recipient wallet. Must match `TREASURY_PUBKEY` in the Anchor program. */
 export const TREASURY_WALLET: string =
-  import.meta.env.VITE_TREASURY_WALLET || "11111111111111111111111111111111";
+  import.meta.env.VITE_TREASURY_WALLET ||
+  "AAaJbDC4HsLyHb59iFovqgAZpe39WDHnE9DRdUXErxEY";
 
 /** USDC mint (devnet default). */
 export const USDC_MINT: string =
@@ -29,7 +30,7 @@ export const ASSET_STORAGE_ENDPOINT: string =
   import.meta.env.VITE_ASSET_STORAGE_ENDPOINT ||
   "https://gateway.pinata.cloud/ipfs/";
 
-/** Platform fee in basis points (e.g. 250 = 2.5%). */
+/** Platform fee in basis points (500 = 5% — must match the Anchor program). */
 export const PLATFORM_FEE_BPS = Number(
-  import.meta.env.VITE_PLATFORM_FEE_BPS || 250
+  import.meta.env.VITE_PLATFORM_FEE_BPS || 500
 );

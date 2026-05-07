@@ -1,15 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import {
-  listAssets,
-  getAllTags,
+  listDemoAssets,
+  getAllDemoTags,
   subscribeAssets,
+  chainAssetToMeshAsset,
 } from "@/lib/services/marketplace";
 import type { MeshAsset, LicenseType } from "@/types/mesh";
 import { AssetCard } from "@/components/marketplace/AssetCard";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Search } from "lucide-react";
+import { useChainAssets } from "@/hooks/useMarketplace";
 
 export const Route = createFileRoute("/marketplace")({
   head: () => ({
@@ -27,18 +29,43 @@ export const Route = createFileRoute("/marketplace")({
 const LICENSES: LicenseType[] = ["personal", "commercial", "extended"];
 
 function Marketplace() {
-  const [assets, setAssets] = useState<MeshAsset[]>([]);
+  const [demoAssets, setDemoAssets] = useState<MeshAsset[]>([]);
   const [query, setQuery] = useState("");
   const [activeTags, setActiveTags] = useState<string[]>([]);
   const [activeLicenses, setActiveLicenses] = useState<LicenseType[]>([]);
 
+  const chain = useChainAssets();
+
   useEffect(() => {
-    const refresh = () => listAssets().then(setAssets);
+    const refresh = () => listDemoAssets().then(setDemoAssets);
     refresh();
     return subscribeAssets(refresh);
   }, []);
 
-  const tags = useMemo(() => getAllTags(), [assets]);
+  // Real chain data first; demo fills the remainder so the UI is never empty.
+  const assets = useMemo<MeshAsset[]>(() => {
+    const chainList = chain.assets.map((a) =>
+      chainAssetToMeshAsset({
+        address: a.address.toString(),
+        creator: a.creator.toString(),
+        assetId: a.assetId,
+        priceSol: a.priceSol,
+        license: a.license,
+        createdAtUnix: a.createdAtUnix,
+      })
+    );
+    if (chainList.length > 0) {
+      // mark demo entries as fallback so the chain ones surface first
+      return [...chainList, ...demoAssets];
+    }
+    return demoAssets;
+  }, [chain.assets, demoAssets]);
+
+  const tags = useMemo(() => {
+    const merged = new Set<string>(getAllDemoTags());
+    for (const a of assets) for (const t of a.tags) merged.add(t);
+    return Array.from(merged).sort();
+  }, [assets]);
 
   const filtered = useMemo(() => {
     return assets.filter((a) => {
@@ -60,12 +87,25 @@ function Marketplace() {
   const toggle = <T,>(arr: T[], v: T) =>
     arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
 
+  const chainCount = chain.assets.length;
+  const totalCount = filtered.length;
+
   return (
     <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6">
       <div className="mb-10">
         <h1 className="text-4xl font-semibold tracking-tight">Marketplace</h1>
         <p className="mt-2 text-muted-foreground">
-          {filtered.length} assets · curated by the Mesh Mint community
+          {totalCount} assets ·{" "}
+          {chain.isLoading ? (
+            <span>loading on-chain listings…</span>
+          ) : chainCount > 0 ? (
+            <span>{chainCount} live on-chain</span>
+          ) : (
+            <span>
+              showing curated demo listings — connect a wallet and mint to
+              publish on-chain
+            </span>
+          )}
         </p>
       </div>
 

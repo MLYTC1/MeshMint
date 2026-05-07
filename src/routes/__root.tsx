@@ -6,7 +6,7 @@ import {
   Link,
 } from "@tanstack/react-router";
 
-import { MeshWalletProvider } from "@/lib/solana/WalletProvider";
+import { Providers as SolanaProviders } from "@/providers";
 import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import { Toaster } from "@/components/ui/sonner";
@@ -65,7 +65,7 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext();
   return (
     <QueryClientProvider client={queryClient}>
-      <MeshWalletProvider>
+      <SolanaProviders>
         <div className="flex min-h-screen flex-col">
           <Header />
           <main className="flex-1">
@@ -74,7 +74,7 @@ function RootComponent() {
           <Footer />
         </div>
         <Toaster />
-      </MeshWalletProvider>
+      </SolanaProviders>
     </QueryClientProvider>
   );
 }

@@ -16,21 +16,33 @@ import { MARKETPLACE_PROGRAM_ADDRESS } from "../programs";
 
 /** InvalidPrice: Price must be greater than zero */
 export const MARKETPLACE_ERROR__INVALID_PRICE = 0x1770; // 6000
-/** AssetIdTooLong: Asset ID must be 64 characters or less */
-export const MARKETPLACE_ERROR__ASSET_ID_TOO_LONG = 0x1771; // 6001
+/** AssetIdTooShort: Asset ID must not be empty */
+export const MARKETPLACE_ERROR__ASSET_ID_TOO_SHORT = 0x1771; // 6001
+/** AssetIdTooLong: Asset ID exceeds maximum length */
+export const MARKETPLACE_ERROR__ASSET_ID_TOO_LONG = 0x1772; // 6002
 /** Unauthorized: Buyer does not own a license for this asset */
-export const MARKETPLACE_ERROR__UNAUTHORIZED = 0x1772; // 6002
+export const MARKETPLACE_ERROR__UNAUTHORIZED = 0x1773; // 6003
+/** InvalidTreasury: Treasury account does not match the program treasury */
+export const MARKETPLACE_ERROR__INVALID_TREASURY = 0x1774; // 6004
+/** FeeMathOverflow: Fee math overflow */
+export const MARKETPLACE_ERROR__FEE_MATH_OVERFLOW = 0x1775; // 6005
 
 export type MarketplaceError =
   | typeof MARKETPLACE_ERROR__ASSET_ID_TOO_LONG
+  | typeof MARKETPLACE_ERROR__ASSET_ID_TOO_SHORT
+  | typeof MARKETPLACE_ERROR__FEE_MATH_OVERFLOW
   | typeof MARKETPLACE_ERROR__INVALID_PRICE
+  | typeof MARKETPLACE_ERROR__INVALID_TREASURY
   | typeof MARKETPLACE_ERROR__UNAUTHORIZED;
 
 let marketplaceErrorMessages: Record<MarketplaceError, string> | undefined;
 if (process.env.NODE_ENV !== "production") {
   marketplaceErrorMessages = {
-    [MARKETPLACE_ERROR__ASSET_ID_TOO_LONG]: `Asset ID must be 64 characters or less`,
+    [MARKETPLACE_ERROR__ASSET_ID_TOO_LONG]: `Asset ID exceeds maximum length`,
+    [MARKETPLACE_ERROR__ASSET_ID_TOO_SHORT]: `Asset ID must not be empty`,
+    [MARKETPLACE_ERROR__FEE_MATH_OVERFLOW]: `Fee math overflow`,
     [MARKETPLACE_ERROR__INVALID_PRICE]: `Price must be greater than zero`,
+    [MARKETPLACE_ERROR__INVALID_TREASURY]: `Treasury account does not match the program treasury`,
     [MARKETPLACE_ERROR__UNAUTHORIZED]: `Buyer does not own a license for this asset`,
   };
 }

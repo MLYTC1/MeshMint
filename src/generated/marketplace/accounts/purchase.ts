@@ -23,6 +23,8 @@ import {
   getI64Encoder,
   getStructDecoder,
   getStructEncoder,
+  getU64Decoder,
+  getU64Encoder,
   getU8Decoder,
   getU8Encoder,
   transformEncoder,
@@ -58,6 +60,7 @@ export type Purchase = {
   buyer: Address;
   asset: Address;
   licenseType: LicenseType;
+  pricePaid: bigint;
   purchasedAt: bigint;
   bump: number;
 };
@@ -66,6 +69,7 @@ export type PurchaseArgs = {
   buyer: Address;
   asset: Address;
   licenseType: LicenseTypeArgs;
+  pricePaid: number | bigint;
   purchasedAt: number | bigint;
   bump: number;
 };
@@ -78,6 +82,7 @@ export function getPurchaseEncoder(): FixedSizeEncoder<PurchaseArgs> {
       ["buyer", getAddressEncoder()],
       ["asset", getAddressEncoder()],
       ["licenseType", getLicenseTypeEncoder()],
+      ["pricePaid", getU64Encoder()],
       ["purchasedAt", getI64Encoder()],
       ["bump", getU8Encoder()],
     ]),
@@ -92,6 +97,7 @@ export function getPurchaseDecoder(): FixedSizeDecoder<Purchase> {
     ["buyer", getAddressDecoder()],
     ["asset", getAddressDecoder()],
     ["licenseType", getLicenseTypeDecoder()],
+    ["pricePaid", getU64Decoder()],
     ["purchasedAt", getI64Decoder()],
     ["bump", getU8Decoder()],
   ]);
@@ -156,5 +162,5 @@ export async function fetchAllMaybePurchase(
 }
 
 export function getPurchaseSize(): number {
-  return 82;
+  return 90;
 }

@@ -52,6 +52,8 @@ export type PurchaseAssetInstruction<
   TProgram extends string = typeof MARKETPLACE_PROGRAM_ADDRESS,
   TAccountBuyer extends string | AccountMeta<string> = string,
   TAccountCreator extends string | AccountMeta<string> = string,
+  TAccountTreasury extends string | AccountMeta<string> =
+    "AAaJbDC4HsLyHb59iFovqgAZpe39WDHnE9DRdUXErxEY",
   TAccountAsset extends string | AccountMeta<string> = string,
   TAccountPurchase extends string | AccountMeta<string> = string,
   TAccountSystemProgram extends string | AccountMeta<string> =
@@ -68,6 +70,9 @@ export type PurchaseAssetInstruction<
       TAccountCreator extends string
         ? WritableAccount<TAccountCreator>
         : TAccountCreator,
+      TAccountTreasury extends string
+        ? WritableAccount<TAccountTreasury>
+        : TAccountTreasury,
       TAccountAsset extends string
         ? ReadonlyAccount<TAccountAsset>
         : TAccountAsset,
@@ -113,12 +118,14 @@ export function getPurchaseAssetInstructionDataCodec(): FixedSizeCodec<
 export type PurchaseAssetAsyncInput<
   TAccountBuyer extends string = string,
   TAccountCreator extends string = string,
+  TAccountTreasury extends string = string,
   TAccountAsset extends string = string,
   TAccountPurchase extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   buyer: TransactionSigner<TAccountBuyer>;
   creator: Address<TAccountCreator>;
+  treasury?: Address<TAccountTreasury>;
   asset: Address<TAccountAsset>;
   purchase?: Address<TAccountPurchase>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -127,6 +134,7 @@ export type PurchaseAssetAsyncInput<
 export async function getPurchaseAssetInstructionAsync<
   TAccountBuyer extends string,
   TAccountCreator extends string,
+  TAccountTreasury extends string,
   TAccountAsset extends string,
   TAccountPurchase extends string,
   TAccountSystemProgram extends string,
@@ -135,6 +143,7 @@ export async function getPurchaseAssetInstructionAsync<
   input: PurchaseAssetAsyncInput<
     TAccountBuyer,
     TAccountCreator,
+    TAccountTreasury,
     TAccountAsset,
     TAccountPurchase,
     TAccountSystemProgram
@@ -145,6 +154,7 @@ export async function getPurchaseAssetInstructionAsync<
     TProgramAddress,
     TAccountBuyer,
     TAccountCreator,
+    TAccountTreasury,
     TAccountAsset,
     TAccountPurchase,
     TAccountSystemProgram
@@ -157,6 +167,7 @@ export async function getPurchaseAssetInstructionAsync<
   const originalAccounts = {
     buyer: { value: input.buyer ?? null, isWritable: true },
     creator: { value: input.creator ?? null, isWritable: true },
+    treasury: { value: input.treasury ?? null, isWritable: true },
     asset: { value: input.asset ?? null, isWritable: false },
     purchase: { value: input.purchase ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
@@ -167,6 +178,10 @@ export async function getPurchaseAssetInstructionAsync<
   >;
 
   // Resolve default values.
+  if (!accounts.treasury.value) {
+    accounts.treasury.value =
+      "AAaJbDC4HsLyHb59iFovqgAZpe39WDHnE9DRdUXErxEY" as Address<"AAaJbDC4HsLyHb59iFovqgAZpe39WDHnE9DRdUXErxEY">;
+  }
   if (!accounts.purchase.value) {
     accounts.purchase.value = await findPurchasePda({
       buyer: expectAddress(accounts.buyer.value),
@@ -183,6 +198,7 @@ export async function getPurchaseAssetInstructionAsync<
     accounts: [
       getAccountMeta(accounts.buyer),
       getAccountMeta(accounts.creator),
+      getAccountMeta(accounts.treasury),
       getAccountMeta(accounts.asset),
       getAccountMeta(accounts.purchase),
       getAccountMeta(accounts.systemProgram),
@@ -193,6 +209,7 @@ export async function getPurchaseAssetInstructionAsync<
     TProgramAddress,
     TAccountBuyer,
     TAccountCreator,
+    TAccountTreasury,
     TAccountAsset,
     TAccountPurchase,
     TAccountSystemProgram
@@ -202,12 +219,14 @@ export async function getPurchaseAssetInstructionAsync<
 export type PurchaseAssetInput<
   TAccountBuyer extends string = string,
   TAccountCreator extends string = string,
+  TAccountTreasury extends string = string,
   TAccountAsset extends string = string,
   TAccountPurchase extends string = string,
   TAccountSystemProgram extends string = string,
 > = {
   buyer: TransactionSigner<TAccountBuyer>;
   creator: Address<TAccountCreator>;
+  treasury?: Address<TAccountTreasury>;
   asset: Address<TAccountAsset>;
   purchase: Address<TAccountPurchase>;
   systemProgram?: Address<TAccountSystemProgram>;
@@ -216,6 +235,7 @@ export type PurchaseAssetInput<
 export function getPurchaseAssetInstruction<
   TAccountBuyer extends string,
   TAccountCreator extends string,
+  TAccountTreasury extends string,
   TAccountAsset extends string,
   TAccountPurchase extends string,
   TAccountSystemProgram extends string,
@@ -224,6 +244,7 @@ export function getPurchaseAssetInstruction<
   input: PurchaseAssetInput<
     TAccountBuyer,
     TAccountCreator,
+    TAccountTreasury,
     TAccountAsset,
     TAccountPurchase,
     TAccountSystemProgram
@@ -233,6 +254,7 @@ export function getPurchaseAssetInstruction<
   TProgramAddress,
   TAccountBuyer,
   TAccountCreator,
+  TAccountTreasury,
   TAccountAsset,
   TAccountPurchase,
   TAccountSystemProgram
@@ -244,6 +266,7 @@ export function getPurchaseAssetInstruction<
   const originalAccounts = {
     buyer: { value: input.buyer ?? null, isWritable: true },
     creator: { value: input.creator ?? null, isWritable: true },
+    treasury: { value: input.treasury ?? null, isWritable: true },
     asset: { value: input.asset ?? null, isWritable: false },
     purchase: { value: input.purchase ?? null, isWritable: true },
     systemProgram: { value: input.systemProgram ?? null, isWritable: false },
@@ -254,6 +277,10 @@ export function getPurchaseAssetInstruction<
   >;
 
   // Resolve default values.
+  if (!accounts.treasury.value) {
+    accounts.treasury.value =
+      "AAaJbDC4HsLyHb59iFovqgAZpe39WDHnE9DRdUXErxEY" as Address<"AAaJbDC4HsLyHb59iFovqgAZpe39WDHnE9DRdUXErxEY">;
+  }
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =
       "11111111111111111111111111111111" as Address<"11111111111111111111111111111111">;
@@ -264,6 +291,7 @@ export function getPurchaseAssetInstruction<
     accounts: [
       getAccountMeta(accounts.buyer),
       getAccountMeta(accounts.creator),
+      getAccountMeta(accounts.treasury),
       getAccountMeta(accounts.asset),
       getAccountMeta(accounts.purchase),
       getAccountMeta(accounts.systemProgram),
@@ -274,6 +302,7 @@ export function getPurchaseAssetInstruction<
     TProgramAddress,
     TAccountBuyer,
     TAccountCreator,
+    TAccountTreasury,
     TAccountAsset,
     TAccountPurchase,
     TAccountSystemProgram
@@ -288,9 +317,10 @@ export type ParsedPurchaseAssetInstruction<
   accounts: {
     buyer: TAccountMetas[0];
     creator: TAccountMetas[1];
-    asset: TAccountMetas[2];
-    purchase: TAccountMetas[3];
-    systemProgram: TAccountMetas[4];
+    treasury: TAccountMetas[2];
+    asset: TAccountMetas[3];
+    purchase: TAccountMetas[4];
+    systemProgram: TAccountMetas[5];
   };
   data: PurchaseAssetInstructionData;
 };
@@ -303,7 +333,7 @@ export function parsePurchaseAssetInstruction<
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
 ): ParsedPurchaseAssetInstruction<TProgram, TAccountMetas> {
-  if (instruction.accounts.length < 5) {
+  if (instruction.accounts.length < 6) {
     // TODO: Coded error.
     throw new Error("Not enough accounts");
   }
@@ -318,6 +348,7 @@ export function parsePurchaseAssetInstruction<
     accounts: {
       buyer: getNextAccount(),
       creator: getNextAccount(),
+      treasury: getNextAccount(),
       asset: getNextAccount(),
       purchase: getNextAccount(),
       systemProgram: getNextAccount(),

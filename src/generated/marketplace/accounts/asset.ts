@@ -21,6 +21,8 @@ import {
   getAddressEncoder,
   getBytesDecoder,
   getBytesEncoder,
+  getI64Decoder,
+  getI64Encoder,
   getStructDecoder,
   getStructEncoder,
   getU32Decoder,
@@ -65,6 +67,7 @@ export type Asset = {
   assetId: string;
   price: bigint;
   licenseType: LicenseType;
+  createdAt: bigint;
   bump: number;
 };
 
@@ -73,6 +76,7 @@ export type AssetArgs = {
   assetId: string;
   price: number | bigint;
   licenseType: LicenseTypeArgs;
+  createdAt: number | bigint;
   bump: number;
 };
 
@@ -85,6 +89,7 @@ export function getAssetEncoder(): Encoder<AssetArgs> {
       ["assetId", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
       ["price", getU64Encoder()],
       ["licenseType", getLicenseTypeEncoder()],
+      ["createdAt", getI64Encoder()],
       ["bump", getU8Encoder()],
     ]),
     (value) => ({ ...value, discriminator: ASSET_DISCRIMINATOR }),
@@ -99,6 +104,7 @@ export function getAssetDecoder(): Decoder<Asset> {
     ["assetId", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
     ["price", getU64Decoder()],
     ["licenseType", getLicenseTypeDecoder()],
+    ["createdAt", getI64Decoder()],
     ["bump", getU8Decoder()],
   ]);
 }

@@ -1,12 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useWalletConnection } from "@solana/react-hooks";
-import { listAssets } from "@/lib/services/marketplace";
+import {
+  listDemoAssets,
+  chainAssetToMeshAsset,
+} from "@/lib/services/marketplace";
 import type { MeshAsset } from "@/types/mesh";
 import { AssetCard } from "@/components/marketplace/AssetCard";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Coins, Plus, ShoppingBag, TrendingUp } from "lucide-react";
+import { useChainAssets } from "@/hooks/useMarketplace";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — Mesh Mint" }] }),
@@ -16,11 +20,28 @@ export const Route = createFileRoute("/dashboard")({
 function Dashboard() {
   const { wallet, connect, connectors, status } = useWalletConnection();
   const address = wallet?.account.address.toString();
-  const [assets, setAssets] = useState<MeshAsset[]>([]);
+  const chain = useChainAssets();
+  const [demoAssets, setDemoAssets] = useState<MeshAsset[]>([]);
 
   useEffect(() => {
-    listAssets().then((a) => setAssets(a.slice(0, 4)));
+    listDemoAssets().then((a) => setDemoAssets(a.slice(0, 4)));
   }, []);
+
+  const myChainListings = useMemo<MeshAsset[]>(() => {
+    if (!address) return [];
+    return chain.assets
+      .filter((a) => a.creator.toString() === address)
+      .map((a) =>
+        chainAssetToMeshAsset({
+          address: a.address.toString(),
+          creator: a.creator.toString(),
+          assetId: a.assetId,
+          priceSol: a.priceSol,
+          license: a.license,
+          createdAtUnix: a.createdAtUnix,
+        })
+      );
+  }, [address, chain.assets]);
 
   if (!address) {
     return (
@@ -34,16 +55,29 @@ function Dashboard() {
           disabled={status === "connecting" || connectors.length === 0}
           className="mt-6 shadow-glow"
         >
-          Connect wallet
+          {status === "connecting" ? "Connecting..." : "Connect wallet"}
         </Button>
       </div>
     );
   }
 
+  // If creator has any on-chain listings, show those; otherwise fall back to
+  // a curated demo slice so the dashboard isn't empty on a brand-new wallet.
+  const displayed = myChainListings.length > 0 ? myChainListings : demoAssets;
+
+  const earningsSol = myChainListings.reduce((acc, a) => acc + a.priceSol, 0);
   const stats = [
-    { icon: ShoppingBag, label: "Listings", value: assets.length },
-    { icon: Coins, label: "Earnings", value: "12.4 SOL" },
-    { icon: TrendingUp, label: "Sales (30d)", value: 47 },
+    { icon: ShoppingBag, label: "Listings", value: myChainListings.length },
+    {
+      icon: Coins,
+      label: "Estimated earnings",
+      value: earningsSol > 0 ? `${earningsSol.toFixed(2)} SOL` : "0 SOL",
+    },
+    {
+      icon: TrendingUp,
+      label: "On-chain status",
+      value: chain.isLoading ? "Loading…" : chain.isError ? "Offline" : "Live",
+    },
   ];
 
   return (
@@ -83,9 +117,20 @@ function Dashboard() {
         ))}
       </div>
 
-      <h2 className="mb-4 text-xl font-semibold">Your listings</h2>
+      <div className="mb-4 flex items-end justify-between gap-4">
+        <h2 className="text-xl font-semibold">
+          {myChainListings.length > 0
+            ? "Your on-chain listings"
+            : "Featured assets (demo)"}
+        </h2>
+        {myChainListings.length === 0 && (
+          <p className="text-xs text-muted-foreground">
+            Mint a listing to see it here.
+          </p>
+        )}
+      </div>
       <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {assets.map((a) => (
+        {displayed.map((a) => (
           <AssetCard key={a.id} asset={a} />
         ))}
       </div>
