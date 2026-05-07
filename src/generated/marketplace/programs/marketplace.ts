@@ -26,7 +26,7 @@ import {
 } from "../instructions";
 
 export const MARKETPLACE_PROGRAM_ADDRESS =
-  "FswM4MeUkcEii2KFeSvJDx6edVP4RCWrCFyaZT6EtUrj" as Address<"FswM4MeUkcEii2KFeSvJDx6edVP4RCWrCFyaZT6EtUrj">;
+  "HtQwAN1WeyKCrLkadB3rTNxZt7hmVkGB797Njz1m19xg" as Address<"HtQwAN1WeyKCrLkadB3rTNxZt7hmVkGB797Njz1m19xg">;
 
 export enum MarketplaceAccount {
   Asset,
@@ -113,7 +113,7 @@ export function identifyMarketplaceInstruction(
 }
 
 export type ParsedMarketplaceInstruction<
-  TProgram extends string = "FswM4MeUkcEii2KFeSvJDx6edVP4RCWrCFyaZT6EtUrj",
+  TProgram extends string = "HtQwAN1WeyKCrLkadB3rTNxZt7hmVkGB797Njz1m19xg",
 > =
   | ({
       instructionType: MarketplaceInstruction.CreateAsset;

@@ -1,139 +1,106 @@
 import { useState, useEffect, useCallback } from "react";
+import { useWalletConnection } from "@solana/react-hooks";
 import {
-  useWalletConnection,
-  useSendTransaction,
-  useBalance,
-} from "@solana/react-hooks";
-import {
-  getProgramDerivedAddress,
-  getAddressEncoder,
-  getBytesEncoder,
-  type Address,
-} from "@solana/kit";
-import {
-  getDepositInstructionDataEncoder,
-  getWithdrawInstructionDataEncoder,
-  VAULT_PROGRAM_ADDRESS,
-} from "./generated/vault";
+  Connection,
+  PublicKey,
+  Transaction,
+  TransactionInstruction,
+  type TransactionSignature,
+} from "@solana/web3.js";
 
 const LAMPORTS_PER_SOL = 1_000_000_000n;
-const SYSTEM_PROGRAM_ADDRESS = "11111111111111111111111111111111" as Address;
+const MARKETPLACE_PROGRAM_ID = new PublicKey(
+  "HtQwAN1WeyKCrLkadB3rTNxZt7hmVkGB797Njz1m19xg"
+);
+const connection = new Connection("https://api.devnet.solana.com", "confirmed");
+
+type WalletAdapterLike = {
+  sendTransaction(
+    transaction: Transaction,
+    connection: Connection
+  ): Promise<TransactionSignature>;
+};
 
 export function VaultCard() {
   const { wallet, status } = useWalletConnection();
-  const { send, isSending } = useSendTransaction();
 
   const [amount, setAmount] = useState("");
-  const [vaultAddress, setVaultAddress] = useState<Address | null>(null);
+  const [marketplaceBalanceLamports, setMarketplaceBalanceLamports] =
+    useState(0n);
   const [txStatus, setTxStatus] = useState<string | null>(null);
+  const [isSending, setIsSending] = useState(false);
 
   const walletAddress = wallet?.account.address;
 
-  // Derive vault PDA when wallet connects
   useEffect(() => {
-    async function deriveVault() {
-      if (!walletAddress) {
-        setVaultAddress(null);
-        return;
-      }
-
-      const [pda] = await getProgramDerivedAddress({
-        programAddress: VAULT_PROGRAM_ADDRESS,
-        seeds: [
-          getBytesEncoder().encode(new Uint8Array([118, 97, 117, 108, 116])), // "vault"
-          getAddressEncoder().encode(walletAddress),
-        ],
-      });
-
-      setVaultAddress(pda);
+    async function getMarketplaceBalance() {
+      const balance = await connection.getBalance(MARKETPLACE_PROGRAM_ID);
+      setMarketplaceBalanceLamports(BigInt(balance));
     }
 
-    deriveVault();
-  }, [walletAddress]);
+    getMarketplaceBalance().catch((err) => {
+      console.error("Marketplace balance failed:", err);
+    });
+  }, []);
 
-  // Get vault balance
-  const vaultBalance = useBalance(vaultAddress ?? undefined);
-  const vaultLamports = vaultBalance?.lamports ?? 0n;
-  const vaultSol = Number(vaultLamports) / Number(LAMPORTS_PER_SOL);
+  const marketplaceSol =
+    Number(marketplaceBalanceLamports) / Number(LAMPORTS_PER_SOL);
+
+  const sendMarketplacePlaceholder = useCallback(
+    async (action: "createListing" | "claimPayout") => {
+      if (!walletAddress || !wallet?.sendTransaction) return;
+
+      try {
+        setIsSending(true);
+        setTxStatus("Building transaction...");
+
+        const signer = new PublicKey(walletAddress);
+        const instruction = new TransactionInstruction({
+          keys: [{ pubkey: signer, isSigner: true, isWritable: true }],
+          programId: MARKETPLACE_PROGRAM_ID,
+          data: Buffer.alloc(0), // TODO: replace with Anchor instruction discriminator + args.
+        });
+
+        const transaction = new Transaction().add(instruction);
+        transaction.feePayer = signer;
+
+        setTxStatus("Awaiting signature...");
+
+        const signature = await (wallet as unknown as WalletAdapterLike)
+          .sendTransaction(transaction, connection);
+
+        setTxStatus(
+          `${action === "createListing" ? "Listing created" : "Payout claimed"}! Signature: ${signature.slice(0, 20)}...`
+        );
+        setAmount("");
+      } catch (err) {
+        console.error(`${action} failed:`, err);
+        setTxStatus(
+          `Error: ${err instanceof Error ? err.message : "Unknown error"}`
+        );
+      } finally {
+        setIsSending(false);
+      }
+    },
+    [wallet, walletAddress]
+  );
 
   const handleDeposit = useCallback(async () => {
-    if (!walletAddress || !vaultAddress || !amount) return;
-
-    try {
-      setTxStatus("Building transaction...");
-
-      const depositAmount = BigInt(
-        Math.floor(parseFloat(amount) * Number(LAMPORTS_PER_SOL))
-      );
-
-      // Manually construct the instruction
-      const instruction = {
-        programAddress: VAULT_PROGRAM_ADDRESS,
-        accounts: [
-          { address: walletAddress, role: 3 }, // WritableSigner (3 = writable + signer)
-          { address: vaultAddress, role: 1 }, // Writable (1 = writable)
-          { address: SYSTEM_PROGRAM_ADDRESS, role: 0 }, // Readonly (0 = readonly)
-        ],
-        data: getDepositInstructionDataEncoder().encode({
-          amount: depositAmount,
-        }),
-      };
-
-      setTxStatus("Awaiting signature...");
-
-      const signature = await send({
-        instructions: [instruction],
-      });
-
-      setTxStatus(`Deposited! Signature: ${signature?.slice(0, 20)}...`);
-      setAmount("");
-    } catch (err) {
-      console.error("Deposit failed:", err);
-      setTxStatus(
-        `Error: ${err instanceof Error ? err.message : "Unknown error"}`
-      );
-    }
-  }, [walletAddress, vaultAddress, amount, send]);
+    if (!amount || parseFloat(amount) <= 0) return;
+    await sendMarketplacePlaceholder("createListing");
+  }, [amount, sendMarketplacePlaceholder]);
 
   const handleWithdraw = useCallback(async () => {
-    if (!walletAddress || !vaultAddress) return;
-
-    try {
-      setTxStatus("Building transaction...");
-
-      // Manually construct the instruction
-      const instruction = {
-        programAddress: VAULT_PROGRAM_ADDRESS,
-        accounts: [
-          { address: walletAddress, role: 3 }, // WritableSigner
-          { address: vaultAddress, role: 1 }, // Writable
-          { address: SYSTEM_PROGRAM_ADDRESS, role: 0 }, // Readonly
-        ],
-        data: getWithdrawInstructionDataEncoder().encode({}),
-      };
-
-      setTxStatus("Awaiting signature...");
-
-      const signature = await send({
-        instructions: [instruction],
-      });
-
-      setTxStatus(`Withdrawn! Signature: ${signature?.slice(0, 20)}...`);
-    } catch (err) {
-      console.error("Withdraw failed:", err);
-      setTxStatus(
-        `Error: ${err instanceof Error ? err.message : "Unknown error"}`
-      );
-    }
-  }, [walletAddress, vaultAddress, send]);
+    await sendMarketplacePlaceholder("claimPayout");
+  }, [sendMarketplacePlaceholder]);
 
   if (status !== "connected") {
     return (
       <section className="w-full max-w-3xl space-y-4 rounded-2xl border border-border-low bg-card p-6 shadow-[0_20px_80px_-50px_rgba(0,0,0,0.35)]">
         <div className="space-y-1">
-          <p className="text-lg font-semibold">SOL Vault</p>
+          <p className="text-lg font-semibold">SOL Marketplace</p>
           <p className="text-sm text-muted">
-            Connect your wallet to interact with the vault program.
+            Connect your wallet to interact with the marketplace program.
           </p>
         </div>
         <div className="rounded-lg bg-cream/50 p-4 text-center text-sm text-muted">
@@ -147,33 +114,31 @@ export function VaultCard() {
     <section className="w-full max-w-3xl space-y-4 rounded-2xl border border-border-low bg-card p-6 shadow-[0_20px_80px_-50px_rgba(0,0,0,0.35)]">
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-1">
-          <p className="text-lg font-semibold">SOL Vault</p>
+          <p className="text-lg font-semibold">SOL Marketplace</p>
           <p className="text-sm text-muted">
-            Deposit SOL into your personal vault PDA and withdraw anytime.
+            Create marketplace listings and claim payouts on devnet.
           </p>
         </div>
         <span className="rounded-full bg-cream px-3 py-1 text-xs font-semibold uppercase tracking-wide text-foreground/80">
-          {vaultLamports > 0n ? "Has funds" : "Empty"}
+          {marketplaceBalanceLamports > 0n ? "Deployed" : "Empty"}
         </span>
       </div>
 
-      {/* Vault Balance */}
+      {/* Marketplace Balance */}
       <div className="rounded-xl border border-border-low bg-cream/30 p-4">
         <p className="text-xs uppercase tracking-wide text-muted">
-          Vault Balance
+          Program Balance
         </p>
         <p className="mt-1 text-3xl font-bold tabular-nums">
-          {vaultSol.toFixed(4)}{" "}
+          {marketplaceSol.toFixed(4)}{" "}
           <span className="text-lg font-normal text-muted">SOL</span>
         </p>
-        {vaultAddress && (
-          <p className="mt-2 truncate font-mono text-xs text-muted">
-            {vaultAddress}
-          </p>
-        )}
+        <p className="mt-2 truncate font-mono text-xs text-muted">
+          {MARKETPLACE_PROGRAM_ID.toBase58()}
+        </p>
       </div>
 
-      {/* Deposit Form */}
+      {/* Create Listing Form */}
       <div className="space-y-3">
         <div className="flex gap-3">
           <input
@@ -192,24 +157,24 @@ export function VaultCard() {
               isSending ||
               !amount ||
               parseFloat(amount) <= 0 ||
-              vaultLamports > 0n
+              !wallet?.sendTransaction
             }
             className="rounded-lg bg-foreground px-5 py-2.5 text-sm font-medium text-background transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {isSending ? "Confirming..." : "Deposit"}
           </button>
         </div>
-        {vaultLamports > 0n && (
+        {!wallet?.sendTransaction && (
           <p className="text-xs text-muted">
-            Vault already has funds. Withdraw first before depositing again.
+            Connected wallet does not expose a sendTransaction method.
           </p>
         )}
       </div>
 
-      {/* Withdraw Button */}
+      {/* Claim Payout Button */}
       <button
         onClick={handleWithdraw}
-        disabled={isSending || vaultLamports === 0n}
+        disabled={isSending || !wallet?.sendTransaction}
         className="w-full rounded-lg border border-border-low bg-card px-4 py-2.5 text-sm font-medium transition hover:-translate-y-0.5 hover:shadow-sm disabled:cursor-not-allowed disabled:opacity-40"
       >
         {isSending ? "Confirming..." : "Withdraw All"}
@@ -225,7 +190,7 @@ export function VaultCard() {
       {/* Educational Footer */}
       <div className="border-t border-border-low pt-4 text-xs text-muted">
         <p className="mb-2">
-          This vault is an{" "}
+          This marketplace is an{" "}
           <a
             href="https://www.anchor-lang.com/docs"
             target="_blank"
@@ -254,12 +219,12 @@ export function VaultCard() {
             Deploy Programs
           </a>
           <a
-            href="https://github.com/ZYJLiu/anchor-vault-template"
+            href="https://www.anchor-lang.com/docs"
             target="_blank"
             rel="noreferrer"
             className="inline-flex items-center gap-1 rounded-md bg-cream px-2 py-1 font-medium transition hover:bg-cream/70"
           >
-            Reference Repo
+            Anchor Docs
           </a>
         </div>
       </div>

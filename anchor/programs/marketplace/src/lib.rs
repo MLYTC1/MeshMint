@@ -4,7 +4,7 @@ use anchor_lang::system_program::{transfer, Transfer}; // imports SOL transfer C
 #[cfg(test)] // only compile this module when running tests
 mod tests; // loads tests.rs as a submodule
 
-declare_id!("FswM4MeUkcEii2KFeSvJDx6edVP4RCWrCFyaZT6EtUrj"); // hardcodes the program's on-chain address
+declare_id!("HtQwAN1WeyKCrLkadB3rTNxZt7hmVkGB797Njz1m19xg"); // hardcodes the program's on-chain address
 
 #[program] // marks this module as the Anchor program — all public fns become instructions
 pub mod marketplace {

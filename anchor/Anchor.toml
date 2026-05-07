@@ -2,10 +2,10 @@
 
 [features]
 resolution = true
-skip-lint = false
+skip-lint = false 
 
 [programs.devnet]
-marketplace = "FswM4MeUkcEii2KFeSvJDx6edVP4RCWrCFyaZT6EtUrj"
+marketplace = "HtQwAN1WeyKCrLkadB3rTNxZt7hmVkGB797Njz1m19xg"
 
 [provider]
 cluster = "devnet"

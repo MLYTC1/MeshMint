@@ -30,7 +30,9 @@
     "@solana/client": "^1.2.0",
     "@solana/kit": "^5.1.0",
     "@solana/react-hooks": "^1.1.5",
+    "@solana/web3.js": "^1.98.4",
     "@tailwindcss/vite": "^4",
+    "buffer": "^6.0.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tailwindcss": "^4"
