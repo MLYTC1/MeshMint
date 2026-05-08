@@ -1,142 +1,22 @@
 import type { MeshAsset } from "@/types/mesh";
+import {
+  fetchMetadataJson,
+  resolveGatewayUrl,
+  type AssetMetadataJson,
+} from "@/lib/pinata";
 
 /**
  * Marketplace data service.
  *
- * - The on-chain `Asset` account stores: creator, asset_id (pointer), price,
- *   license, created_at, bump. It does NOT store binary 3D content.
- * - This module owns the **off-chain metadata cache** (title, description,
- *   modelUrl, …) keyed by `asset_id`, and the **demo asset fallback** so the
- *   UI keeps working when the chain has nothing to show yet.
- *
- * Real chain reads happen in `@/hooks/useMarketplace` via `useChainAssets()`.
- * UI components merge the two: chain assets first, demo as fallback.
+ * - The on-chain `Asset` account stores: creator, asset_id (IPFS CID pointer),
+ *   price, license, created_at, bump. Binary 3D content is NEVER on chain.
+ * - This module owns the **off-chain metadata cache** — it resolves the
+ *   `asset_id` CID to a Pinata-hosted JSON document that contains the model
+ *   CID, title, description, tags, etc.
+ * - No demo/mock data. All marketplace content is real on-chain + Pinata data.
  */
 
-const DEFAULT_MODEL_POOL = [
-  "https://modelviewer.dev/shared-assets/models/Astronaut.glb",
-  "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/DamagedHelmet/glTF-Binary/DamagedHelmet.glb",
-  "https://modelviewer.dev/shared-assets/models/RobotExpressive.glb",
-  "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Avocado/glTF-Binary/Avocado.glb",
-  "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/Duck/glTF-Binary/Duck.glb",
-  "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Models/master/2.0/BoomBox/glTF-Binary/BoomBox.glb",
-];
-
-/** Pseudo-deterministic preview model for an unknown chain asset. */
-export function getDefaultModelUrl(seed: string): string {
-  let h = 0;
-  for (let i = 0; i < seed.length; i += 1)
-    h = (h * 31 + seed.charCodeAt(i)) | 0;
-  const idx = Math.abs(h) % DEFAULT_MODEL_POOL.length;
-  return DEFAULT_MODEL_POOL[idx];
-}
-
-const DEMO_ASSETS: MeshAsset[] = [
-  {
-    id: "demo-astro-01",
-    title: "Orbital Astronaut",
-    description:
-      "High-fidelity rigged astronaut, optimized for cinematic renders and game engines. PBR textures, 4K maps included.",
-    creator: { wallet: "8xv...K2j", handle: "nebulaforge", reputation: 982 },
-    modelUrl: DEFAULT_MODEL_POOL[0],
-    priceSol: 2.4,
-    priceUsdc: 320,
-    currency: "SOL",
-    license: "commercial",
-    tags: ["character", "scifi", "rigged"],
-    polygons: 48200,
-    fileSizeMb: 18.4,
-    createdAt: "2025-03-12",
-  },
-  {
-    id: "demo-helmet-01",
-    title: "Damaged Combat Helmet",
-    description:
-      "Battle-worn helmet asset with detailed normal and roughness maps. Ready for AAA pipelines.",
-    creator: { wallet: "Hk3...9Lp", handle: "ironworks", reputation: 1244 },
-    modelUrl: DEFAULT_MODEL_POOL[1],
-    priceSol: 1.2,
-    priceUsdc: 160,
-    currency: "SOL",
-    license: "extended",
-    tags: ["prop", "scifi", "pbr"],
-    polygons: 15400,
-    fileSizeMb: 6.2,
-    createdAt: "2025-04-02",
-  },
-  {
-    id: "demo-robot-01",
-    title: "Expressive Companion Bot",
-    description:
-      "Stylized robot with full animation set. Perfect for indie games and motion design.",
-    creator: { wallet: "2Ap...Mn7", handle: "polyloop", reputation: 671 },
-    modelUrl: DEFAULT_MODEL_POOL[2],
-    priceSol: 0.8,
-    priceUsdc: 110,
-    currency: "USDC",
-    license: "personal",
-    tags: ["character", "stylized", "animated"],
-    polygons: 22100,
-    fileSizeMb: 9.1,
-    createdAt: "2025-04-18",
-  },
-  {
-    id: "demo-avocado-01",
-    title: "Studio Avocado",
-    description:
-      "Photoreal product shot avocado. Studio-grade textures, perfect for ads and renders.",
-    creator: { wallet: "Qz4...R1x", handle: "studiograin", reputation: 540 },
-    modelUrl: DEFAULT_MODEL_POOL[3],
-    priceSol: 0.3,
-    priceUsdc: 40,
-    currency: "USDC",
-    license: "commercial",
-    tags: ["product", "food", "pbr"],
-    polygons: 4200,
-    fileSizeMb: 1.8,
-    createdAt: "2025-05-01",
-  },
-  {
-    id: "demo-duck-01",
-    title: "Vintage Rubber Duck",
-    description:
-      "Classic glTF reference duck — clean topology, beginner-friendly license.",
-    creator: { wallet: "7Yu...B8c", handle: "polyloop", reputation: 671 },
-    modelUrl: DEFAULT_MODEL_POOL[4],
-    priceSol: 0.15,
-    priceUsdc: 20,
-    currency: "USDC",
-    license: "personal",
-    tags: ["prop", "stylized"],
-    polygons: 2100,
-    fileSizeMb: 0.9,
-    createdAt: "2025-02-20",
-  },
-  {
-    id: "demo-boombox-01",
-    title: "Retro Boombox",
-    description:
-      "Detailed 80s boombox with PBR materials. Includes separable mesh parts.",
-    creator: { wallet: "Mn2...V4q", handle: "ironworks", reputation: 1244 },
-    modelUrl: DEFAULT_MODEL_POOL[5],
-    priceSol: 0.65,
-    priceUsdc: 85,
-    currency: "SOL",
-    license: "commercial",
-    tags: ["prop", "retro", "pbr"],
-    polygons: 9800,
-    fileSizeMb: 3.4,
-    createdAt: "2025-03-28",
-  },
-];
-
-// --- Off-chain metadata cache ------------------------------------------------
-//
-// When a creator mints an asset on chain, the on-chain account only carries
-// the small `asset_id` pointer. The rich metadata (title, description, the
-// 3D model URL itself) lives off chain. For this hackathon-grade build we
-// keep that metadata in an in-memory map keyed by asset_id; in production
-// you'd resolve the asset_id to an IPFS/HTTP JSON document instead.
+// --- Metadata cache ----------------------------------------------------------
 
 type MetadataPatch = Pick<
   MeshAsset,
@@ -150,9 +30,13 @@ type MetadataPatch = Pick<
 > & {
   priceUsdc?: number;
   coverUrl?: string;
+  /** Raw model CID — only exposed for download after license verification. */
+  modelCid?: string;
 };
 
 const metadataByAssetId = new Map<string, MetadataPatch>();
+const pendingFetches = new Map<string, Promise<MetadataPatch | null>>();
+const failedFetches = new Set<string>();
 const listeners = new Set<() => void>();
 
 function emit(): void {
@@ -166,9 +50,10 @@ export function subscribeAssets(cb: () => void): () => void {
   };
 }
 
-/** Save off-chain metadata for a freshly-minted asset (in-memory). */
+/** Save off-chain metadata for a freshly-minted asset (optimistic). */
 export function setAssetMetadata(assetId: string, patch: MetadataPatch): void {
   metadataByAssetId.set(assetId, patch);
+  failedFetches.delete(assetId);
   emit();
 }
 
@@ -176,32 +61,91 @@ export function getAssetMetadata(assetId: string): MetadataPatch | undefined {
   return metadataByAssetId.get(assetId);
 }
 
-// --- Demo fallback API -------------------------------------------------------
-
-export async function listDemoAssets(): Promise<MeshAsset[]> {
-  return [...DEMO_ASSETS];
+/**
+ * Get the model CID for an asset. Only call this after verifying the caller
+ * holds a valid on-chain license (Purchase PDA). The CID can then be resolved
+ * to a gateway download URL.
+ */
+export function getModelCid(assetId: string): string | undefined {
+  return metadataByAssetId.get(assetId)?.modelCid;
 }
 
-export async function getDemoAsset(id: string): Promise<MeshAsset | undefined> {
-  return DEMO_ASSETS.find((a) => a.id === id);
+/** Check if metadata fetch previously failed for this asset. */
+export function isMetadataFailed(assetId: string): boolean {
+  return failedFetches.has(assetId);
 }
 
-export async function listDemoAssetsByCreator(
-  handle: string
-): Promise<MeshAsset[]> {
-  return DEMO_ASSETS.filter(
-    (a) => a.creator.handle === handle || a.creator.wallet === handle
-  );
+/**
+ * Resolve metadata for an asset_id. Checks in-memory cache first, then
+ * fetches from Pinata gateway if the asset_id looks like a CID.
+ * Returns null if resolution fails. Failed fetches are tracked so the UI
+ * can show an error state instead of infinite loading.
+ */
+export async function resolveAssetMetadata(
+  assetId: string
+): Promise<MetadataPatch | null> {
+  const cached = metadataByAssetId.get(assetId);
+  if (cached) return cached;
+
+  if (failedFetches.has(assetId)) return null;
+
+  const existing = pendingFetches.get(assetId);
+  if (existing) return existing;
+
+  const isCidLike = /^(Qm[a-zA-Z0-9]{44}|bafy[a-z0-9]{50,})$/.test(assetId);
+  if (!isCidLike) return null;
+
+  const promise = (async (): Promise<MetadataPatch | null> => {
+    try {
+      const json = await fetchMetadataJson(assetId);
+      const patch = pinataJsonToPatch(json);
+      metadataByAssetId.set(assetId, patch);
+      emit();
+      return patch;
+    } catch (err) {
+      console.warn(
+        `[marketplace] failed to resolve metadata for ${assetId}`,
+        err
+      );
+      failedFetches.add(assetId);
+      emit();
+      return null;
+    } finally {
+      pendingFetches.delete(assetId);
+    }
+  })();
+
+  pendingFetches.set(assetId, promise);
+  return promise;
 }
 
-export function getAllDemoTags(): string[] {
-  return Array.from(new Set(DEMO_ASSETS.flatMap((a) => a.tags))).sort();
+function pinataJsonToPatch(json: AssetMetadataJson): MetadataPatch {
+  return {
+    title: json.title,
+    description: json.description,
+    modelUrl: resolveGatewayUrl(json.modelCid),
+    modelCid: json.modelCid,
+    currency: (json.currency as "SOL" | "USDC") || "SOL",
+    tags: json.tags ?? [],
+    polygons: json.polygons,
+    fileSizeMb: json.fileSizeMb,
+    priceUsdc: json.priceUsdc,
+  };
+}
+
+// --- Tags from cached metadata -----------------------------------------------
+
+export function getAllTags(): string[] {
+  const tags = new Set<string>();
+  for (const meta of metadataByAssetId.values()) {
+    for (const t of meta.tags) tags.add(t);
+  }
+  return Array.from(tags).sort();
 }
 
 // --- Chain → UI conversion ---------------------------------------------------
 
 export type MinimalChainAsset = Readonly<{
-  /** PDA address — used as the canonical UI id. */
   address: string;
   creator: string;
   assetId: string;
@@ -215,34 +159,34 @@ function shortWallet(addr: string): string {
 }
 
 /**
- * Project an on-chain asset (small) onto a full `MeshAsset` (UI-rich) by
- * merging in any locally cached metadata, falling back to deterministic
- * defaults. Never throws — missing fields are filled with sensible defaults
- * so the render tree can never crash.
+ * Project an on-chain asset onto a full `MeshAsset` by merging in any
+ * locally cached metadata. Falls back to placeholder values if metadata
+ * hasn't been fetched yet.
  */
 export function chainAssetToMeshAsset(chain: MinimalChainAsset): MeshAsset {
   const meta = metadataByAssetId.get(chain.assetId);
+  const failed = failedFetches.has(chain.assetId);
   const wallet = chain.creator;
-  const creatorHandle = meta?.modelUrl
-    ? shortWallet(wallet)
-    : shortWallet(wallet);
   return {
     id: chain.address,
-    title: meta?.title ?? `Asset ${chain.assetId.slice(0, 12)}`,
+    title: meta?.title ?? `Asset ${chain.assetId.slice(0, 12)}…`,
     description:
-      meta?.description ?? "On-chain Mesh Mint listing. Metadata pending.",
+      meta?.description ??
+      (failed
+        ? "Metadata unavailable — IPFS gateway did not respond."
+        : "On-chain listing. Loading metadata from IPFS…"),
     creator: {
       wallet,
-      handle: creatorHandle,
+      handle: shortWallet(wallet),
       reputation: 0,
     },
-    modelUrl: meta?.modelUrl ?? getDefaultModelUrl(chain.assetId),
+    modelUrl: meta?.modelUrl ?? "",
     coverUrl: meta?.coverUrl,
     priceSol: chain.priceSol,
     priceUsdc: meta?.priceUsdc ?? Math.round(chain.priceSol * 130),
     currency: meta?.currency ?? "SOL",
     license: chain.license,
-    tags: meta?.tags ?? ["on-chain", chain.license],
+    tags: meta?.tags ?? [chain.license],
     polygons: meta?.polygons,
     fileSizeMb: meta?.fileSizeMb,
     createdAt: chain.createdAtUnix
@@ -252,17 +196,14 @@ export function chainAssetToMeshAsset(chain: MinimalChainAsset): MeshAsset {
   };
 }
 
-// --- Backwards-compatible names for existing routes --------------------------
-
-export const listAssets = listDemoAssets;
-export const getAsset = getDemoAsset;
-export const getAllTags = getAllDemoTags;
-export const listAssetsByCreator = listDemoAssetsByCreator;
-
 /**
- * @deprecated Mint flow now refetches real chain data instead of optimistic
- * insertion. Use {@link setAssetMetadata} to save off-chain metadata.
+ * Batch-resolve metadata for a list of chain assets in parallel.
+ * Uses Promise.allSettled to avoid waterfall fetches.
  */
-export function addAsset(_asset: MeshAsset): void {
-  // intentional no-op — kept so older imports don't break during migration.
+export async function resolveAllMetadata(assetIds: string[]): Promise<void> {
+  const uncached = assetIds.filter(
+    (id) => !metadataByAssetId.has(id) && !failedFetches.has(id)
+  );
+  if (uncached.length === 0) return;
+  await Promise.allSettled(uncached.map((id) => resolveAssetMetadata(id)));
 }

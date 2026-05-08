@@ -16,6 +16,13 @@ import { ModelViewer } from "@/components/solana/ModelViewer";
 import { useWalletConnection } from "@solana/react-hooks";
 import { useMarketplaceActions, useChainAssets } from "@/hooks/useMarketplace";
 import { setAssetMetadata } from "@/lib/services/marketplace";
+import {
+  uploadModel,
+  uploadMetadata,
+  resolveGatewayUrl,
+  isPinataConfigured,
+  type AssetMetadataJson,
+} from "@/lib/pinata";
 import type { Currency, LicenseType } from "@/types/mesh";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -27,19 +34,6 @@ export const Route = createFileRoute("/upload")({
   component: UploadPage,
 });
 
-function makeAssetId(title: string): string {
-  // 12-char rand suffix keeps PDA-uniqueness even when titles collide.
-  const slug = title
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 32);
-  const rand = Math.random().toString(36).slice(2, 10);
-  const suffix = `${Date.now().toString(36)}-${rand}`;
-  return slug ? `${slug}-${suffix}` : `asset-${suffix}`;
-}
-
 function UploadPage() {
   const { wallet, connect, connectors, status } = useWalletConnection();
   const walletAddress = wallet?.account.address.toString();
@@ -47,7 +41,8 @@ function UploadPage() {
   const chain = useChainAssets();
   const navigate = useNavigate();
 
-  const [modelUrl, setModelUrl] = useState<string | null>(null);
+  const [modelFile, setModelFile] = useState<File | null>(null);
+  const [modelPreviewUrl, setModelPreviewUrl] = useState<string | null>(null);
   const [fileSizeMb, setFileSizeMb] = useState<number | undefined>();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -55,6 +50,7 @@ function UploadPage() {
   const [currency, setCurrency] = useState<Currency>("SOL");
   const [license, setLicense] = useState<LicenseType>("personal");
   const [submitting, setSubmitting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
 
   const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -63,7 +59,8 @@ function UploadPage() {
       toast.error("Please upload a .glb or .gltf file");
       return;
     }
-    setModelUrl(URL.createObjectURL(file));
+    setModelFile(file);
+    setModelPreviewUrl(URL.createObjectURL(file));
     setFileSizeMb(Number((file.size / (1024 * 1024)).toFixed(2)));
   };
 
@@ -75,7 +72,7 @@ function UploadPage() {
       }
       return;
     }
-    if (!modelUrl) {
+    if (!modelFile || !modelPreviewUrl) {
       toast.error("Upload a 3D file first");
       return;
     }
@@ -83,42 +80,73 @@ function UploadPage() {
       toast.error("Wallet session not ready");
       return;
     }
+    if (!isPinataConfigured()) {
+      toast.error("Pinata not configured", {
+        description: "Set VITE_PINATA_JWT in your .env file to enable uploads.",
+      });
+      return;
+    }
 
     setSubmitting(true);
     try {
       const numericPrice = Number(price) || 0;
-      // Convert USDC -> approx SOL at a fixed devnet ratio (130 USD/SOL).
-      // The on-chain program only handles SOL; this is a UX-level conversion.
       const priceSol = currency === "SOL" ? numericPrice : numericPrice / 130;
       if (priceSol <= 0) {
         throw new Error("Price must be greater than 0");
       }
 
-      const assetId = makeAssetId(title);
+      // 1. Upload 3D model file to Pinata/IPFS
+      setUploadProgress("Uploading 3D model to IPFS…");
+      const { cid: modelCid } = await uploadModel(modelFile);
 
-      // Save off-chain metadata BEFORE sending the tx so even if we navigate
-      // away mid-confirmation, the chain refetch will resolve the metadata.
-      setAssetMetadata(assetId, {
+      // 2. Upload metadata JSON to Pinata/IPFS
+      setUploadProgress("Uploading metadata to IPFS…");
+      const metadataJson: AssetMetadataJson = {
         title: title.trim() || "Untitled asset",
         description: description.trim() || "Newly minted Mesh Mint asset.",
-        modelUrl,
-        currency,
-        priceUsdc: currency === "USDC" ? numericPrice : numericPrice * 130,
+        modelCid,
+        creator: walletAddress,
+        license,
         tags: ["new", license],
+        createdAt: new Date().toISOString(),
+        fileName: modelFile.name,
+        mimeType: modelFile.name.endsWith(".gltf")
+          ? "model/gltf+json"
+          : "model/gltf-binary",
+        priceSol,
+        priceUsdc: currency === "USDC" ? numericPrice : numericPrice * 130,
+        currency,
         fileSizeMb,
+      };
+      const { cid: metadataCid } = await uploadMetadata(metadataJson);
+
+      // 3. Save optimistic metadata so the asset renders immediately
+      //    even before the IPFS gateway propagates.
+      const modelUrl = resolveGatewayUrl(modelCid);
+      setAssetMetadata(metadataCid, {
+        title: metadataJson.title,
+        description: metadataJson.description,
+        modelUrl,
+        modelCid,
+        currency: metadataJson.currency as Currency,
+        priceUsdc: metadataJson.priceUsdc,
+        tags: metadataJson.tags,
+        fileSizeMb: metadataJson.fileSizeMb,
       });
 
+      // 4. Create on-chain asset with metadata CID as the asset_id
+      setUploadProgress("Minting on-chain…");
       const signature = await actions.createAsset({
-        assetId,
+        assetId: metadataCid,
         priceSol,
         license,
       });
 
-      // Refetch chain data so the marketplace shows the new listing.
+      // 5. Refetch chain data so the marketplace shows the new listing
       void chain.refresh();
 
       toast.success("Listing published on-chain", {
-        description: `Signature ${signature.slice(0, 10)}…`,
+        description: `Model stored on IPFS · Signature ${signature.slice(0, 10)}…`,
       });
       navigate({ to: "/marketplace" });
     } catch (err) {
@@ -128,6 +156,7 @@ function UploadPage() {
       });
     } finally {
       setSubmitting(false);
+      setUploadProgress("");
     }
   };
 
@@ -145,8 +174,11 @@ function UploadPage() {
       <form onSubmit={onSubmit} className="grid gap-8 lg:grid-cols-[1fr_400px]">
         {/* Left — preview / upload */}
         <div className="space-y-4">
-          {modelUrl ? (
-            <ModelViewer url={modelUrl} className="aspect-[4/3] w-full" />
+          {modelPreviewUrl ? (
+            <ModelViewer
+              url={modelPreviewUrl}
+              className="aspect-[4/3] w-full"
+            />
           ) : (
             <label className="flex aspect-[4/3] cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-border/60 bg-card transition-colors hover:border-primary/40 hover:bg-card/80">
               <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-gradient-mint shadow-glow">
@@ -164,12 +196,15 @@ function UploadPage() {
               />
             </label>
           )}
-          {modelUrl && (
+          {modelPreviewUrl && (
             <Button
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => setModelUrl(null)}
+              onClick={() => {
+                setModelFile(null);
+                setModelPreviewUrl(null);
+              }}
             >
               Replace file
             </Button>
@@ -252,7 +287,7 @@ function UploadPage() {
           >
             <Sparkles className="h-4 w-4" />
             {submitting
-              ? "Minting…"
+              ? uploadProgress || "Processing…"
               : walletAddress
                 ? "Mint & publish listing"
                 : status === "connecting"
@@ -260,8 +295,8 @@ function UploadPage() {
                   : "Connect wallet"}
           </Button>
           <p className="text-center text-xs text-muted-foreground">
-            Settled on-chain via your Mesh Mint marketplace program. 5% fee to
-            treasury, 95% to creator.
+            Model stored on IPFS via Pinata · Settled on-chain via Solana. 5%
+            fee to treasury, 95% to creator.
           </p>
         </Card>
       </form>

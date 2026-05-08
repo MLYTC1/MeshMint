@@ -2,8 +2,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useWalletConnection } from "@solana/react-hooks";
 import {
-  listDemoAssets,
   chainAssetToMeshAsset,
+  resolveAllMetadata,
 } from "@/lib/services/marketplace";
 import type { MeshAsset } from "@/types/mesh";
 import { AssetCard } from "@/components/marketplace/AssetCard";
@@ -21,11 +21,14 @@ function Dashboard() {
   const { wallet, connect, connectors, status } = useWalletConnection();
   const address = wallet?.account.address.toString();
   const chain = useChainAssets();
-  const [demoAssets, setDemoAssets] = useState<MeshAsset[]>([]);
+  const [metaVersion, setMetaVersion] = useState(0);
 
+  // Resolve Pinata metadata for all chain assets the creator owns
   useEffect(() => {
-    listDemoAssets().then((a) => setDemoAssets(a.slice(0, 4)));
-  }, []);
+    if (chain.assets.length === 0) return;
+    const assetIds = chain.assets.map((a) => a.assetId);
+    resolveAllMetadata(assetIds).then(() => setMetaVersion((n) => n + 1));
+  }, [chain.assets]);
 
   const myChainListings = useMemo<MeshAsset[]>(() => {
     if (!address) return [];
@@ -41,7 +44,7 @@ function Dashboard() {
           createdAtUnix: a.createdAtUnix,
         })
       );
-  }, [address, chain.assets]);
+  }, [address, chain.assets, metaVersion]);
 
   if (!address) {
     return (
@@ -60,10 +63,6 @@ function Dashboard() {
       </div>
     );
   }
-
-  // If creator has any on-chain listings, show those; otherwise fall back to
-  // a curated demo slice so the dashboard isn't empty on a brand-new wallet.
-  const displayed = myChainListings.length > 0 ? myChainListings : demoAssets;
 
   const earningsSol = myChainListings.reduce((acc, a) => acc + a.priceSol, 0);
   const stats = [
@@ -121,7 +120,7 @@ function Dashboard() {
         <h2 className="text-xl font-semibold">
           {myChainListings.length > 0
             ? "Your on-chain listings"
-            : "Featured assets (demo)"}
+            : "No listings yet"}
         </h2>
         {myChainListings.length === 0 && (
           <p className="text-xs text-muted-foreground">
@@ -129,11 +128,19 @@ function Dashboard() {
           </p>
         )}
       </div>
-      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {displayed.map((a) => (
-          <AssetCard key={a.id} asset={a} />
-        ))}
-      </div>
+      {myChainListings.length > 0 ? (
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+          {myChainListings.map((a) => (
+            <AssetCard key={a.id} asset={a} />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-dashed border-border/60 p-12 text-center text-muted-foreground">
+          {chain.isLoading
+            ? "Loading your listings…"
+            : "You haven't minted any assets yet. Create your first listing!"}
+        </div>
+      )}
     </div>
   );
 }

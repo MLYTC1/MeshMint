@@ -1,8 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
-  getDemoAsset,
   chainAssetToMeshAsset,
+  resolveAssetMetadata,
+  getModelCid,
+  isMetadataFailed,
 } from "@/lib/services/marketplace";
+import { resolveGatewayUrl } from "@/lib/pinata";
 import type { MeshAsset, Currency } from "@/types/mesh";
 import { ModelViewer } from "@/components/solana/ModelViewer";
 import { Button } from "@/components/ui/button";
@@ -12,8 +15,10 @@ import { useWalletConnection } from "@solana/react-hooks";
 import { toast } from "sonner";
 import { SUPPORTED_CURRENCIES, formatPrice, getPrice } from "@/lib/pricing";
 import {
+  AlertTriangle,
   Coins,
   Download,
+  Loader2,
   ShieldCheck,
   Sparkles,
   User,
@@ -22,6 +27,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useChainAssets, useMarketplaceActions } from "@/hooks/useMarketplace";
+import { usePurchaseCheck } from "@/hooks/usePurchaseCheck";
 import { formatSendTransactionError } from "@/lib/solana/sendError";
 import { downloadModelFromUrl } from "@/lib/downloadModel";
 
@@ -38,40 +44,43 @@ function AssetDetail() {
   const walletAddress = wallet?.account.address.toString();
   const actions = useMarketplaceActions();
   const chain = useChainAssets();
+  const [metaVersion, setMetaVersion] = useState(0);
 
-  const [demoAsset, setDemoAsset] = useState<MeshAsset | null>(null);
-  const [loadingDemo, setLoadingDemo] = useState(true);
+  const chainHit = useMemo(
+    () => chain.assets.find((a) => a.address.toString() === id),
+    [chain.assets, id]
+  );
 
+  // On-chain license verification — checks if connected wallet holds a Purchase PDA
+  const { status: licenseStatus, recheck: recheckLicense } = usePurchaseCheck(
+    chainHit ? id : undefined
+  );
+
+  // Resolve metadata from Pinata
   useEffect(() => {
-    let cancelled = false;
-    setLoadingDemo(true);
-    getDemoAsset(id).then((a) => {
-      if (cancelled) return;
-      setDemoAsset(a ?? null);
-      setLoadingDemo(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
+    if (!chainHit) return;
+    resolveAssetMetadata(chainHit.assetId).then(() =>
+      setMetaVersion((n) => n + 1)
+    );
+  }, [chainHit]);
 
   const asset = useMemo<MeshAsset | null>(() => {
-    // Prefer real chain data — match by PDA address (the canonical UI id).
-    const chainHit = chain.assets.find((a) => a.address.toString() === id);
-    if (chainHit) {
-      return chainAssetToMeshAsset({
-        address: chainHit.address.toString(),
-        creator: chainHit.creator.toString(),
-        assetId: chainHit.assetId,
-        priceSol: chainHit.priceSol,
-        license: chainHit.license,
-        createdAtUnix: chainHit.createdAtUnix,
-      });
-    }
-    return demoAsset;
-  }, [chain.assets, demoAsset, id]);
+    if (!chainHit) return null;
+    return chainAssetToMeshAsset({
+      address: chainHit.address.toString(),
+      creator: chainHit.creator.toString(),
+      assetId: chainHit.assetId,
+      priceSol: chainHit.priceSol,
+      license: chainHit.license,
+      createdAtUnix: chainHit.createdAtUnix,
+    });
+  }, [chainHit, metaVersion]);
 
-  const [owned, setOwned] = useState(false);
+  const metadataFailed = chainHit ? isMetadataFailed(chainHit.assetId) : false;
+  const isCreator =
+    walletAddress && chainHit?.creator.toString() === walletAddress;
+  const isOwned = licenseStatus === "owned" || isCreator;
+
   const [pending, setPending] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [currency, setCurrency] = useState<Currency>("SOL");
@@ -81,7 +90,7 @@ function AssetDetail() {
   }, [asset]);
 
   const onPurchase = async () => {
-    if (!asset) return;
+    if (!asset || !chainHit) return;
     if (!walletAddress) {
       if (connectors[0]) await connect(connectors[0].id);
       return;
@@ -91,22 +100,13 @@ function AssetDetail() {
       return;
     }
 
-    // Demo assets aren't on-chain; surface a clear message instead of crashing.
-    const chainHit = chain.assets.find((a) => a.address.toString() === id);
-    if (!chainHit) {
-      toast.error("Demo asset", {
-        description: "This is curated demo content — not yet minted on-chain.",
-      });
-      return;
-    }
-
     setPending(true);
     try {
       const signature = await actions.purchaseAsset({
         assetId: chainHit.assetId,
         creator: chainHit.creator.toString(),
       });
-      setOwned(true);
+      recheckLicense();
       toast.success(`License acquired for ${asset.title}`, {
         description: `Signature ${signature.slice(0, 10)}…`,
       });
@@ -121,17 +121,29 @@ function AssetDetail() {
   };
 
   const onDownloadModel = async () => {
-    if (!asset?.modelUrl) {
-      toast.error("No download URL", {
-        description: "This listing has no file URL yet.",
+    if (!chainHit || !isOwned) {
+      toast.error("License required", {
+        description: "Purchase a license to download this asset.",
       });
       return;
     }
+
+    // Only resolve the download URL after ownership is verified
+    const modelCid = getModelCid(chainHit.assetId);
+    if (!modelCid) {
+      toast.error("No download available", {
+        description: "Model file not found in metadata.",
+      });
+      return;
+    }
+
+    const downloadUrl = resolveGatewayUrl(modelCid);
     setDownloading(true);
     try {
-      await downloadModelFromUrl(asset.modelUrl, {
-        title: asset.title,
-        fallbackBase: asset.id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24) || "asset",
+      await downloadModelFromUrl(downloadUrl, {
+        title: asset?.title ?? "asset",
+        fallbackBase:
+          asset?.id.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24) || "asset",
       });
       toast.success("Download started", {
         description: "Check your downloads folder.",
@@ -139,16 +151,18 @@ function AssetDetail() {
     } catch (err) {
       console.error("[asset] download failed", err);
       toast.error("Download failed", {
-        description: err instanceof Error ? err.message : "Could not save the file.",
+        description:
+          err instanceof Error ? err.message : "Could not save the file.",
       });
     } finally {
       setDownloading(false);
     }
   };
 
-  if (loadingDemo && chain.isLoading) {
+  if (chain.isLoading) {
     return (
       <div className="mx-auto max-w-md px-6 py-32 text-center text-muted-foreground">
+        <Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin" />
         Loading asset…
       </div>
     );
@@ -159,7 +173,7 @@ function AssetDetail() {
       <div className="mx-auto max-w-md px-6 py-32 text-center">
         <h1 className="text-2xl font-semibold">Asset not found</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          That asset isn't in the mesh.
+          That asset isn't on-chain yet, or the address is invalid.
         </p>
         <Button asChild className="mt-6 shadow-glow">
           <Link to="/marketplace">Back to marketplace</Link>
@@ -173,7 +187,21 @@ function AssetDetail() {
       <div className="grid gap-8 lg:grid-cols-[1fr_400px]">
         {/* Preview */}
         <div className="space-y-4">
-          <ModelViewer url={asset.modelUrl} className="aspect-[4/3] w-full" />
+          {asset.modelUrl ? (
+            <ModelViewer url={asset.modelUrl} className="aspect-[4/3] w-full" />
+          ) : metadataFailed ? (
+            <div className="flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-xl border border-border bg-muted/20 text-muted-foreground">
+              <AlertTriangle className="h-6 w-6" />
+              <p className="text-sm">
+                3D preview unavailable — IPFS gateway did not respond
+              </p>
+            </div>
+          ) : (
+            <div className="flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-xl border border-border bg-muted/20 text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin" />
+              <p className="text-sm">Loading 3D preview from IPFS…</p>
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             {asset.tags.map((t) => (
               <Badge key={t} variant="outline">
@@ -211,7 +239,7 @@ function AssetDetail() {
             </h1>
             <Link
               to="/profile/$handle"
-              params={{ handle: asset.creator.handle }}
+              params={{ handle: asset.creator.wallet }}
               className="mt-2 inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
             >
               <User className="h-3.5 w-3.5" />@{asset.creator.handle}
@@ -250,11 +278,13 @@ function AssetDetail() {
               </div>
             </div>
 
-            {owned ? (
+            {isOwned ? (
               <div className="mt-6 space-y-3">
                 <div className="flex items-center gap-2 rounded-md border border-primary/40 bg-primary/10 p-3 text-sm text-primary">
                   <ShieldCheck className="h-4 w-4" />
-                  License verified on-chain
+                  {isCreator
+                    ? "You are the creator of this asset"
+                    : "License verified on-chain"}
                 </div>
                 <Button
                   type="button"
@@ -266,6 +296,11 @@ function AssetDetail() {
                   <Download className="h-4 w-4" />
                   {downloading ? "Preparing download…" : "Download asset"}
                 </Button>
+              </div>
+            ) : licenseStatus === "checking" ? (
+              <div className="mt-6 flex items-center justify-center gap-2 py-3 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Verifying license…
               </div>
             ) : (
               <Button

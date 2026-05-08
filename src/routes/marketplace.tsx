@@ -1,10 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import {
-  listDemoAssets,
-  getAllDemoTags,
+  getAllTags,
   subscribeAssets,
   chainAssetToMeshAsset,
+  resolveAllMetadata,
 } from "@/lib/services/marketplace";
 import type { MeshAsset, LicenseType } from "@/types/mesh";
 import { AssetCard } from "@/components/marketplace/AssetCard";
@@ -29,22 +29,27 @@ export const Route = createFileRoute("/marketplace")({
 const LICENSES: LicenseType[] = ["personal", "commercial", "extended"];
 
 function Marketplace() {
-  const [demoAssets, setDemoAssets] = useState<MeshAsset[]>([]);
   const [query, setQuery] = useState("");
   const [activeTags, setActiveTags] = useState<string[]>([]);
   const [activeLicenses, setActiveLicenses] = useState<LicenseType[]>([]);
+  const [metaVersion, setMetaVersion] = useState(0);
 
   const chain = useChainAssets();
 
+  // Resolve Pinata metadata for all chain assets
   useEffect(() => {
-    const refresh = () => listDemoAssets().then(setDemoAssets);
-    refresh();
-    return subscribeAssets(refresh);
+    if (chain.assets.length === 0) return;
+    const assetIds = chain.assets.map((a) => a.assetId);
+    resolveAllMetadata(assetIds).then(() => setMetaVersion((n) => n + 1));
+  }, [chain.assets]);
+
+  // Subscribe to metadata cache updates (from upload flow optimistic writes)
+  useEffect(() => {
+    return subscribeAssets(() => setMetaVersion((n) => n + 1));
   }, []);
 
-  // Real chain data first; demo fills the remainder so the UI is never empty.
   const assets = useMemo<MeshAsset[]>(() => {
-    const chainList = chain.assets.map((a) =>
+    return chain.assets.map((a) =>
       chainAssetToMeshAsset({
         address: a.address.toString(),
         creator: a.creator.toString(),
@@ -54,15 +59,10 @@ function Marketplace() {
         createdAtUnix: a.createdAtUnix,
       })
     );
-    if (chainList.length > 0) {
-      // mark demo entries as fallback so the chain ones surface first
-      return [...chainList, ...demoAssets];
-    }
-    return demoAssets;
-  }, [chain.assets, demoAssets]);
+  }, [chain.assets, metaVersion]);
 
   const tags = useMemo(() => {
-    const merged = new Set<string>(getAllDemoTags());
+    const merged = new Set<string>(getAllTags());
     for (const a of assets) for (const t of a.tags) merged.add(t);
     return Array.from(merged).sort();
   }, [assets]);
@@ -87,7 +87,6 @@ function Marketplace() {
   const toggle = <T,>(arr: T[], v: T) =>
     arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v];
 
-  const chainCount = chain.assets.length;
   const totalCount = filtered.length;
 
   return (
@@ -95,15 +94,15 @@ function Marketplace() {
       <div className="mb-10">
         <h1 className="text-4xl font-semibold tracking-tight">Marketplace</h1>
         <p className="mt-2 text-muted-foreground">
-          {totalCount} assets ·{" "}
           {chain.isLoading ? (
-            <span>loading on-chain listings…</span>
-          ) : chainCount > 0 ? (
-            <span>{chainCount} live on-chain</span>
+            <span>Loading on-chain listings…</span>
+          ) : totalCount > 0 ? (
+            <span>
+              {totalCount} asset{totalCount !== 1 ? "s" : ""} live on-chain
+            </span>
           ) : (
             <span>
-              showing curated demo listings — connect a wallet and mint to
-              publish on-chain
+              No listings yet — connect a wallet and mint to publish on-chain
             </span>
           )}
         </p>
@@ -145,23 +144,25 @@ function Marketplace() {
             </div>
           </div>
 
-          <div>
-            <h3 className="mb-3 text-xs uppercase tracking-wider text-muted-foreground">
-              Tags
-            </h3>
-            <div className="flex flex-wrap gap-2">
-              {tags.map((t) => (
-                <Badge
-                  key={t}
-                  onClick={() => setActiveTags((p) => toggle(p, t))}
-                  variant={activeTags.includes(t) ? "default" : "outline"}
-                  className="cursor-pointer"
-                >
-                  {t}
-                </Badge>
-              ))}
+          {tags.length > 0 && (
+            <div>
+              <h3 className="mb-3 text-xs uppercase tracking-wider text-muted-foreground">
+                Tags
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {tags.map((t) => (
+                  <Badge
+                    key={t}
+                    onClick={() => setActiveTags((p) => toggle(p, t))}
+                    variant={activeTags.includes(t) ? "default" : "outline"}
+                    className="cursor-pointer"
+                  >
+                    {t}
+                  </Badge>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </aside>
 
         {/* Grid */}
@@ -169,9 +170,16 @@ function Marketplace() {
           {filtered.map((a) => (
             <AssetCard key={a.id} asset={a} />
           ))}
-          {!filtered.length && (
+          {!chain.isLoading && !filtered.length && (
             <div className="col-span-full rounded-xl border border-dashed border-border/60 p-12 text-center text-muted-foreground">
-              No assets match your filters.
+              {assets.length === 0
+                ? "No assets minted yet. Be the first creator!"
+                : "No assets match your filters."}
+            </div>
+          )}
+          {chain.isLoading && (
+            <div className="col-span-full rounded-xl border border-dashed border-border/60 p-12 text-center text-muted-foreground">
+              Loading on-chain data…
             </div>
           )}
         </div>

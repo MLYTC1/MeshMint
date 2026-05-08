@@ -7,8 +7,6 @@
  */
 
 import {
-  addDecoderSizePrefix,
-  addEncoderSizePrefix,
   combineCodec,
   fixDecoderSize,
   fixEncoderSize,
@@ -16,19 +14,13 @@ import {
   getBytesEncoder,
   getStructDecoder,
   getStructEncoder,
-  getU32Decoder,
-  getU32Encoder,
-  getU64Decoder,
-  getU64Encoder,
-  getUtf8Decoder,
-  getUtf8Encoder,
   transformEncoder,
   type AccountMeta,
   type AccountSignerMeta,
   type Address,
-  type Codec,
-  type Decoder,
-  type Encoder,
+  type FixedSizeCodec,
+  type FixedSizeDecoder,
+  type FixedSizeEncoder,
   type Instruction,
   type InstructionWithAccounts,
   type InstructionWithData,
@@ -40,24 +32,16 @@ import {
 } from "@solana/kit";
 import { MARKETPLACE_PROGRAM_ADDRESS } from "../programs";
 import { getAccountMetaFactory, type ResolvedAccount } from "../shared";
-import {
-  getLicenseTypeDecoder,
-  getLicenseTypeEncoder,
-  type LicenseType,
-  type LicenseTypeArgs,
-} from "../types";
 
-export const CREATE_ASSET_DISCRIMINATOR = new Uint8Array([
-  28, 42, 120, 51, 7, 38, 156, 136,
+export const CLOSE_ASSET_DISCRIMINATOR = new Uint8Array([
+  39, 124, 90, 146, 16, 82, 77, 253,
 ]);
 
-export function getCreateAssetDiscriminatorBytes() {
-  return fixEncoderSize(getBytesEncoder(), 8).encode(
-    CREATE_ASSET_DISCRIMINATOR,
-  );
+export function getCloseAssetDiscriminatorBytes() {
+  return fixEncoderSize(getBytesEncoder(), 8).encode(CLOSE_ASSET_DISCRIMINATOR);
 }
 
-export type CreateAssetInstruction<
+export type CloseAssetInstruction<
   TProgram extends string = typeof MARKETPLACE_PROGRAM_ADDRESS,
   TAccountCreator extends string | AccountMeta<string> = string,
   TAccountAsset extends string | AccountMeta<string> = string,
@@ -82,51 +66,34 @@ export type CreateAssetInstruction<
     ]
   >;
 
-export type CreateAssetInstructionData = {
-  discriminator: ReadonlyUint8Array;
-  assetId: string;
-  price: bigint;
-  licenseType: LicenseType;
-};
+export type CloseAssetInstructionData = { discriminator: ReadonlyUint8Array };
 
-export type CreateAssetInstructionDataArgs = {
-  assetId: string;
-  price: number | bigint;
-  licenseType: LicenseTypeArgs;
-};
+export type CloseAssetInstructionDataArgs = {};
 
-export function getCreateAssetInstructionDataEncoder(): Encoder<CreateAssetInstructionDataArgs> {
+export function getCloseAssetInstructionDataEncoder(): FixedSizeEncoder<CloseAssetInstructionDataArgs> {
   return transformEncoder(
-    getStructEncoder([
-      ["discriminator", fixEncoderSize(getBytesEncoder(), 8)],
-      ["assetId", addEncoderSizePrefix(getUtf8Encoder(), getU32Encoder())],
-      ["price", getU64Encoder()],
-      ["licenseType", getLicenseTypeEncoder()],
-    ]),
-    (value) => ({ ...value, discriminator: CREATE_ASSET_DISCRIMINATOR }),
+    getStructEncoder([["discriminator", fixEncoderSize(getBytesEncoder(), 8)]]),
+    (value) => ({ ...value, discriminator: CLOSE_ASSET_DISCRIMINATOR }),
   );
 }
 
-export function getCreateAssetInstructionDataDecoder(): Decoder<CreateAssetInstructionData> {
+export function getCloseAssetInstructionDataDecoder(): FixedSizeDecoder<CloseAssetInstructionData> {
   return getStructDecoder([
     ["discriminator", fixDecoderSize(getBytesDecoder(), 8)],
-    ["assetId", addDecoderSizePrefix(getUtf8Decoder(), getU32Decoder())],
-    ["price", getU64Decoder()],
-    ["licenseType", getLicenseTypeDecoder()],
   ]);
 }
 
-export function getCreateAssetInstructionDataCodec(): Codec<
-  CreateAssetInstructionDataArgs,
-  CreateAssetInstructionData
+export function getCloseAssetInstructionDataCodec(): FixedSizeCodec<
+  CloseAssetInstructionDataArgs,
+  CloseAssetInstructionData
 > {
   return combineCodec(
-    getCreateAssetInstructionDataEncoder(),
-    getCreateAssetInstructionDataDecoder(),
+    getCloseAssetInstructionDataEncoder(),
+    getCloseAssetInstructionDataDecoder(),
   );
 }
 
-export type CreateAssetInput<
+export type CloseAssetInput<
   TAccountCreator extends string = string,
   TAccountAsset extends string = string,
   TAccountSystemProgram extends string = string,
@@ -134,24 +101,17 @@ export type CreateAssetInput<
   creator: TransactionSigner<TAccountCreator>;
   asset: Address<TAccountAsset>;
   systemProgram?: Address<TAccountSystemProgram>;
-  assetId: CreateAssetInstructionDataArgs["assetId"];
-  price: CreateAssetInstructionDataArgs["price"];
-  licenseType: CreateAssetInstructionDataArgs["licenseType"];
 };
 
-export function getCreateAssetInstruction<
+export function getCloseAssetInstruction<
   TAccountCreator extends string,
   TAccountAsset extends string,
   TAccountSystemProgram extends string,
   TProgramAddress extends Address = typeof MARKETPLACE_PROGRAM_ADDRESS,
 >(
-  input: CreateAssetInput<
-    TAccountCreator,
-    TAccountAsset,
-    TAccountSystemProgram
-  >,
+  input: CloseAssetInput<TAccountCreator, TAccountAsset, TAccountSystemProgram>,
   config?: { programAddress?: TProgramAddress },
-): CreateAssetInstruction<
+): CloseAssetInstruction<
   TProgramAddress,
   TAccountCreator,
   TAccountAsset,
@@ -171,9 +131,6 @@ export function getCreateAssetInstruction<
     ResolvedAccount
   >;
 
-  // Original args.
-  const args = { ...input };
-
   // Resolve default values.
   if (!accounts.systemProgram.value) {
     accounts.systemProgram.value =
@@ -187,11 +144,9 @@ export function getCreateAssetInstruction<
       getAccountMeta(accounts.asset),
       getAccountMeta(accounts.systemProgram),
     ],
-    data: getCreateAssetInstructionDataEncoder().encode(
-      args as CreateAssetInstructionDataArgs,
-    ),
+    data: getCloseAssetInstructionDataEncoder().encode({}),
     programAddress,
-  } as CreateAssetInstruction<
+  } as CloseAssetInstruction<
     TProgramAddress,
     TAccountCreator,
     TAccountAsset,
@@ -199,7 +154,7 @@ export function getCreateAssetInstruction<
   >);
 }
 
-export type ParsedCreateAssetInstruction<
+export type ParsedCloseAssetInstruction<
   TProgram extends string = typeof MARKETPLACE_PROGRAM_ADDRESS,
   TAccountMetas extends readonly AccountMeta[] = readonly AccountMeta[],
 > = {
@@ -209,17 +164,17 @@ export type ParsedCreateAssetInstruction<
     asset: TAccountMetas[1];
     systemProgram: TAccountMetas[2];
   };
-  data: CreateAssetInstructionData;
+  data: CloseAssetInstructionData;
 };
 
-export function parseCreateAssetInstruction<
+export function parseCloseAssetInstruction<
   TProgram extends string,
   TAccountMetas extends readonly AccountMeta[],
 >(
   instruction: Instruction<TProgram> &
     InstructionWithAccounts<TAccountMetas> &
     InstructionWithData<ReadonlyUint8Array>,
-): ParsedCreateAssetInstruction<TProgram, TAccountMetas> {
+): ParsedCloseAssetInstruction<TProgram, TAccountMetas> {
   if (instruction.accounts.length < 3) {
     // TODO: Coded error.
     throw new Error("Not enough accounts");
@@ -237,6 +192,6 @@ export function parseCreateAssetInstruction<
       asset: getNextAccount(),
       systemProgram: getNextAccount(),
     },
-    data: getCreateAssetInstructionDataDecoder().decode(instruction.data),
+    data: getCloseAssetInstructionDataDecoder().decode(instruction.data),
   };
 }

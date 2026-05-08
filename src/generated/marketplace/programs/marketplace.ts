@@ -17,9 +17,11 @@ import {
   type ReadonlyUint8Array,
 } from "@solana/kit";
 import {
+  parseCloseAssetInstruction,
   parseCreateAssetInstruction,
   parsePurchaseAssetInstruction,
   parseVerifyLicenseInstruction,
+  type ParsedCloseAssetInstruction,
   type ParsedCreateAssetInstruction,
   type ParsedPurchaseAssetInstruction,
   type ParsedVerifyLicenseInstruction,
@@ -65,6 +67,7 @@ export function identifyMarketplaceAccount(
 }
 
 export enum MarketplaceInstruction {
+  CloseAsset,
   CreateAsset,
   PurchaseAsset,
   VerifyLicense,
@@ -74,6 +77,17 @@ export function identifyMarketplaceInstruction(
   instruction: { data: ReadonlyUint8Array } | ReadonlyUint8Array,
 ): MarketplaceInstruction {
   const data = "data" in instruction ? instruction.data : instruction;
+  if (
+    containsBytes(
+      data,
+      fixEncoderSize(getBytesEncoder(), 8).encode(
+        new Uint8Array([39, 124, 90, 146, 16, 82, 77, 253]),
+      ),
+      0,
+    )
+  ) {
+    return MarketplaceInstruction.CloseAsset;
+  }
   if (
     containsBytes(
       data,
@@ -116,6 +130,9 @@ export type ParsedMarketplaceInstruction<
   TProgram extends string = "3z9VVHRqRW8ywzy2mtkpmDAGMjqgGkz8iz1dtXGs75xH",
 > =
   | ({
+      instructionType: MarketplaceInstruction.CloseAsset;
+    } & ParsedCloseAssetInstruction<TProgram>)
+  | ({
       instructionType: MarketplaceInstruction.CreateAsset;
     } & ParsedCreateAssetInstruction<TProgram>)
   | ({
@@ -130,6 +147,13 @@ export function parseMarketplaceInstruction<TProgram extends string>(
 ): ParsedMarketplaceInstruction<TProgram> {
   const instructionType = identifyMarketplaceInstruction(instruction);
   switch (instructionType) {
+    case MarketplaceInstruction.CloseAsset: {
+      assertIsInstructionWithAccounts(instruction);
+      return {
+        instructionType: MarketplaceInstruction.CloseAsset,
+        ...parseCloseAssetInstruction(instruction),
+      };
+    }
     case MarketplaceInstruction.CreateAsset: {
       assertIsInstructionWithAccounts(instruction);
       return {

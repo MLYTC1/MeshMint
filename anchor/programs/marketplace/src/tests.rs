@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::{ID as PROGRAM_ID, PLATFORM_FEE_BPS, TREASURY_PUBKEY};
+    use crate::{asset_seed, ID as PROGRAM_ID, PLATFORM_FEE_BPS, TREASURY_PUBKEY};
     use litesvm::LiteSVM;
     use solana_sdk::{
         instruction::{AccountMeta, Instruction},
@@ -17,7 +17,7 @@ mod tests {
 
     fn get_asset_pda(creator: &Pubkey, asset_id: &str) -> (Pubkey, u8) {
         Pubkey::find_program_address(
-            &[b"asset", creator.as_ref(), asset_id.as_bytes()],
+            &[b"asset", creator.as_ref(), &asset_seed(asset_id)],
             &PROGRAM_ID,
         )
     }

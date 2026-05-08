@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program::{transfer, Transfer};
+use sha2::{Digest, Sha256};
 
 #[cfg(test)]
 mod tests;
@@ -20,6 +21,14 @@ pub const PLATFORM_FEE_BPS: u64 = 500;
 /// The `asset_id` is also the off-chain metadata pointer (e.g. an IPFS CID or
 /// short URL): binary 3D content is NEVER stored on chain.
 pub const MAX_ASSET_ID_LEN: usize = 96;
+
+/// Hash an asset_id to a 32-byte seed. IPFS CIDs can exceed the 32-byte Solana
+/// PDA seed limit, so every PDA derivation runs through this helper.
+pub fn asset_seed(asset_id: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(asset_id.as_bytes());
+    hasher.finalize().into()
+}
 
 #[program]
 pub mod marketplace {
@@ -101,6 +110,12 @@ pub mod marketplace {
         purchase.purchased_at = Clock::get()?.unix_timestamp;
         purchase.bump = ctx.bumps.purchase;
 
+        Ok(())
+    }
+
+    /// Close an asset listing. Only the original creator can close it.
+    /// Reclaims the account rent back to the creator.
+    pub fn close_asset(_ctx: Context<CloseAsset>) -> Result<()> {
         Ok(())
     }
 
@@ -187,7 +202,7 @@ pub struct CreateAsset<'info> {
         init,
         payer = creator,
         space = Asset::LEN,
-        seeds = [b"asset", creator.key().as_ref(), asset_id.as_bytes()],
+        seeds = [b"asset", creator.key().as_ref(), &asset_seed(&asset_id)],
         bump,
     )]
     pub asset: Account<'info, Asset>,
@@ -210,7 +225,7 @@ pub struct PurchaseAsset<'info> {
     pub treasury: SystemAccount<'info>,
 
     #[account(
-        seeds = [b"asset", creator.key().as_ref(), asset.asset_id.as_bytes()],
+        seeds = [b"asset", creator.key().as_ref(), &asset_seed(&asset.asset_id)],
         bump = asset.bump,
         has_one = creator,
     )]
@@ -224,6 +239,23 @@ pub struct PurchaseAsset<'info> {
         bump,
     )]
     pub purchase: Account<'info, Purchase>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct CloseAsset<'info> {
+    #[account(mut)]
+    pub creator: Signer<'info>,
+
+    #[account(
+        mut,
+        close = creator,
+        has_one = creator,
+        seeds = [b"asset", creator.key().as_ref(), &asset_seed(&asset.asset_id)],
+        bump = asset.bump,
+    )]
+    pub asset: Account<'info, Asset>,
 
     pub system_program: Program<'info, System>,
 }

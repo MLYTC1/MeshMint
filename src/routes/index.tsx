@@ -1,10 +1,14 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Sparkles } from "lucide-react";
-import { useEffect, useState } from "react";
-import { listAssets } from "@/lib/services/marketplace";
+import { useEffect, useMemo, useState } from "react";
+import {
+  chainAssetToMeshAsset,
+  resolveAllMetadata,
+} from "@/lib/services/marketplace";
 import { AssetCard } from "@/components/marketplace/AssetCard";
 import type { MeshAsset } from "@/types/mesh";
+import { useChainAssets } from "@/hooks/useMarketplace";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -21,10 +25,27 @@ export const Route = createFileRoute("/")({
 });
 
 function Landing() {
-  const [featured, setFeatured] = useState<MeshAsset[]>([]);
+  const chain = useChainAssets();
+  const [metaVersion, setMetaVersion] = useState(0);
+
   useEffect(() => {
-    listAssets().then((a) => setFeatured(a.slice(0, 3)));
-  }, []);
+    if (chain.assets.length === 0) return;
+    const assetIds = chain.assets.map((a) => a.assetId);
+    resolveAllMetadata(assetIds).then(() => setMetaVersion((n) => n + 1));
+  }, [chain.assets]);
+
+  const featured = useMemo<MeshAsset[]>(() => {
+    return chain.assets.slice(0, 3).map((a) =>
+      chainAssetToMeshAsset({
+        address: a.address.toString(),
+        creator: a.creator.toString(),
+        assetId: a.assetId,
+        priceSol: a.priceSol,
+        license: a.license,
+        createdAtUnix: a.createdAtUnix,
+      })
+    );
+  }, [chain.assets, metaVersion]);
 
   return (
     <div>
@@ -74,7 +95,7 @@ function Landing() {
             {
               n: "01",
               t: "Upload .glb",
-              b: "Drop your 3D file. We auto-generate previews, thumbnails and metadata.",
+              b: "Drop your 3D file. It's stored permanently on IPFS via Pinata.",
             },
             {
               n: "02",
@@ -89,7 +110,7 @@ function Landing() {
             {
               n: "04",
               t: "Buyer unlocks",
-              b: "Ownership verified on-chain. Buyer downloads the original file.",
+              b: "Ownership verified on-chain. Buyer downloads the original file from IPFS.",
             },
           ].map((s) => (
             <div
@@ -107,28 +128,30 @@ function Landing() {
       </section>
 
       {/* Featured */}
-      <section className="mx-auto max-w-7xl px-6 py-16">
-        <div className="mb-8 flex items-end justify-between">
-          <div>
-            <h2 className="text-3xl font-semibold tracking-tight">
-              Featured assets
-            </h2>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Hand-picked drops from the Mesh Mint community.
-            </p>
+      {featured.length > 0 && (
+        <section className="mx-auto max-w-7xl px-6 py-16">
+          <div className="mb-8 flex items-end justify-between">
+            <div>
+              <h2 className="text-3xl font-semibold tracking-tight">
+                Featured assets
+              </h2>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Recent listings from the Mesh Mint marketplace.
+              </p>
+            </div>
+            <Button asChild variant="ghost" className="gap-1">
+              <Link to="/marketplace">
+                View all <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
           </div>
-          <Button asChild variant="ghost" className="gap-1">
-            <Link to="/marketplace">
-              View all <ArrowRight className="h-4 w-4" />
-            </Link>
-          </Button>
-        </div>
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {featured.map((a) => (
-            <AssetCard key={a.id} asset={a} />
-          ))}
-        </div>
-      </section>
+          <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {featured.map((a) => (
+              <AssetCard key={a.id} asset={a} />
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* CTA */}
       <section className="mx-auto max-w-7xl px-6 py-16">
