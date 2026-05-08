@@ -9,8 +9,8 @@ import type { MeshAsset } from "@/types/mesh";
 import { AssetCard } from "@/components/marketplace/AssetCard";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Coins, Plus, ShoppingBag, TrendingUp } from "lucide-react";
-import { useChainAssets } from "@/hooks/useMarketplace";
+import { Coins, Plus, ShoppingBag, TrendingUp, Users } from "lucide-react";
+import { useChainAssets, useChainPurchases } from "@/hooks/useMarketplace";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({ meta: [{ title: "Dashboard — Mesh Mint" }] }),
@@ -21,6 +21,7 @@ function Dashboard() {
   const { wallet, connect, connectors, status } = useWalletConnection();
   const address = wallet?.account.address.toString();
   const chain = useChainAssets();
+  const { purchases } = useChainPurchases();
   const [metaVersion, setMetaVersion] = useState(0);
 
   // Resolve Pinata metadata for all chain assets the creator owns
@@ -42,9 +43,29 @@ function Dashboard() {
           priceSol: a.priceSol,
           license: a.license,
           createdAtUnix: a.createdAtUnix,
-        })
+        }),
       );
   }, [address, chain.assets, metaVersion]);
+
+  // Compute real earnings from on-chain Purchase accounts.
+  // Match purchases whose `asset` field points to one of the creator's listings.
+  // The creator receives 95% of each sale (5% platform fee).
+  const CREATOR_SHARE = 0.95;
+  const { salesCount, earnedSol } = useMemo(() => {
+    if (!address || myChainListings.length === 0)
+      return { salesCount: 0, earnedSol: 0 };
+
+    const myAssetAddresses = new Set(myChainListings.map((a) => a.id));
+    let count = 0;
+    let total = 0;
+    for (const p of purchases) {
+      if (myAssetAddresses.has(p.asset.toString())) {
+        count += 1;
+        total += p.pricePaidSol * CREATOR_SHARE;
+      }
+    }
+    return { salesCount: count, earnedSol: total };
+  }, [address, myChainListings, purchases]);
 
   if (!address) {
     return (
@@ -64,13 +85,13 @@ function Dashboard() {
     );
   }
 
-  const earningsSol = myChainListings.reduce((acc, a) => acc + a.priceSol, 0);
   const stats = [
     { icon: ShoppingBag, label: "Listings", value: myChainListings.length },
+    { icon: Users, label: "Sales", value: salesCount },
     {
       icon: Coins,
-      label: "Estimated earnings",
-      value: earningsSol > 0 ? `${earningsSol.toFixed(2)} SOL` : "0 SOL",
+      label: "Earned",
+      value: earnedSol > 0 ? `${earnedSol.toFixed(4)} SOL` : "0 SOL",
     },
     {
       icon: TrendingUp,
@@ -100,7 +121,7 @@ function Dashboard() {
         </Button>
       </div>
 
-      <div className="mb-10 grid gap-4 sm:grid-cols-3">
+      <div className="mb-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((s) => (
           <Card key={s.label} className="flex items-center gap-4 p-5">
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-mint">

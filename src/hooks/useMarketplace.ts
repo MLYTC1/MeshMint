@@ -17,10 +17,13 @@ import {
   getPurchaseAssetInstructionAsync,
   getCloseAssetInstruction,
   ASSET_DISCRIMINATOR,
+  PURCHASE_DISCRIMINATOR,
   getAssetDecoder,
+  getPurchaseDecoder,
   LicenseType,
   MARKETPLACE_PROGRAM_ADDRESS,
   type Asset,
+  type Purchase,
 } from "@/generated/marketplace";
 import { findAssetPda } from "@/lib/solana/assetPda";
 import type { LicenseType as UiLicenseType } from "@/types/mesh";
@@ -235,6 +238,81 @@ export function useChainAssets() {
     refresh: query.refresh,
   };
 }
+
+// --------------------------------------------------------------------------
+// Reading on-chain purchases (license proofs)
+// --------------------------------------------------------------------------
+
+const PURCHASE_DISCRIMINATOR_BASE58 = getBase58Decoder().decode(
+  Uint8Array.from(PURCHASE_DISCRIMINATOR),
+) as Base58EncodedBytes;
+
+export type ChainPurchase = Readonly<{
+  buyer: Address;
+  /** The Asset PDA this purchase is for. */
+  asset: Address;
+  pricePaidLamports: bigint;
+  pricePaidSol: number;
+  purchasedAtUnix: number;
+}>;
+
+/**
+ * Fetch all on-chain Purchase accounts. Each purchase proves a license was
+ * bought and records the amount paid. Used to calculate real creator earnings.
+ */
+export function useChainPurchases() {
+  const query = useProgramAccounts(MARKETPLACE_PROGRAM_ADDRESS, {
+    config: {
+      encoding: "base64",
+      filters: [
+        {
+          memcmp: {
+            offset: 0n,
+            bytes: PURCHASE_DISCRIMINATOR_BASE58,
+            encoding: "base58",
+          },
+        },
+      ],
+    },
+  });
+
+  const purchases = useMemo<ChainPurchase[]>(() => {
+    const list = query.accounts;
+    if (!Array.isArray(list)) return [];
+    const decoder = getPurchaseDecoder();
+    const decoded: ChainPurchase[] = [];
+    for (const entry of list) {
+      try {
+        const data = entry.account.data;
+        const base64 = Array.isArray(data) ? data[0] : (data as string);
+        if (typeof base64 !== "string") continue;
+        const bytes = base64ToBytes(base64);
+        const p = decoder.decode(bytes) as Purchase;
+        decoded.push({
+          buyer: p.buyer,
+          asset: p.asset,
+          pricePaidLamports: p.pricePaid,
+          pricePaidSol: lamportsToSol(p.pricePaid),
+          purchasedAtUnix: Number(p.purchasedAt),
+        });
+      } catch (err) {
+        console.warn("[useChainPurchases] failed to decode purchase", err);
+      }
+    }
+    return decoded;
+  }, [query.accounts]);
+
+  return {
+    purchases,
+    isLoading: query.isLoading,
+    isError: query.isError,
+    refresh: query.refresh,
+  };
+}
+
+// --------------------------------------------------------------------------
+// Utilities
+// --------------------------------------------------------------------------
 
 function isCidLike(id: string): boolean {
   return /^(Qm[a-zA-Z0-9]{44}|bafy[a-z0-9]{50,})$/.test(id);
