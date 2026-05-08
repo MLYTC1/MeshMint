@@ -1,6 +1,6 @@
-# vite-anchor
+# MeshMint
 
-React + Vite starter with Tailwind CSS, `@solana/react-hooks`, and an Anchor vault program example.
+Decentralized 3D asset marketplace built with React + Vite, Anchor, and Pinata/IPFS.
 
 ## Getting Started
 
@@ -13,42 +13,46 @@ npm install   # Builds program and generates client automatically
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173), connect your wallet, and interact with the vault on devnet.
+Open [http://localhost:5173](http://localhost:5173), connect your wallet, and interact with the marketplace on devnet.
 
 ## What's Included
 
 - **Wallet connection** via `@solana/react-hooks` with auto-discovery
-- **SOL Vault program** - deposit and withdraw SOL from a personal PDA vault
-- **Codama-generated client** - type-safe program interactions using `@solana/kit`
+- **On-chain marketplace program** - create listings, purchase licenses, verify ownership, and close listings
+- **Pinata/IPFS persistence** - 3D model files and metadata are stored off-chain on IPFS
+- **Codama-generated client** - type-safe Anchor program interactions using `@solana/kit`
 - **Tailwind CSS v4** with light/dark mode
 
 ## Stack
 
-| Layer          | Technology                              |
-| -------------- | --------------------------------------- |
-| Frontend       | React 19, Vite, TypeScript              |
-| Styling        | Tailwind CSS v4                         |
-| Solana Client  | `@solana/client`, `@solana/react-hooks` |
-| Program Client | Codama-generated, `@solana/kit`         |
-| Program        | Anchor (Rust)                           |
+| Layer          | Technology                                               |
+| -------------- | -------------------------------------------------------- |
+| Frontend       | React 19, Vite, TypeScript                               |
+| Styling        | Tailwind CSS v4                                          |
+| Solana Client  | `@solana/client`, `@solana/react-hooks`                  |
+| Program Client | Codama-generated, `@solana/kit`                          |
+| Program        | Anchor (Rust)                                            |
+| Storage        | Pinata IPFS API + configurable public gateways (`VITE_*`) |
 
 ## Project Structure
 
 ```
 ├── src/
-│   ├── App.tsx               # Main app with wallet UI
-│   ├── VaultCard.tsx         # Vault deposit/withdraw UI
-│   ├── providers.tsx         # Solana client setup
-│   ├── generated/vault/      # Codama-generated program client
-│   └── main.tsx              # Entry point
-├── anchor/                   # Anchor workspace
-│   └── programs/vault/       # Vault program (Rust)
-└── codama.json               # Codama client generation config
+│   ├── routes/                    # Marketplace pages (home, asset, upload, dashboard)
+│   ├── hooks/useMarketplace.ts    # On-chain asset and purchase hooks
+│   ├── lib/services/marketplace.ts# IPFS metadata resolution + mapping
+│   ├── lib/pinata.ts              # Pinata upload and gateway helpers
+│   ├── lib/solana/assetPda.ts     # SHA-256-based Asset PDA derivation
+│   ├── generated/marketplace/     # Codama-generated program client
+│   └── main.tsx                   # Entry point
+├── anchor/                        # Anchor workspace
+│   └── programs/marketplace/      # Marketplace program (Rust)
+└── codama.json                    # Codama client generation config
 ```
 
-## Deploy Your Own Vault
+## Deploy Your Own Program
 
-The included vault program is already deployed to devnet. To deploy your own:
+The included marketplace program is already deployed to devnet. To deploy your own:
 
 ### Prerequisites
 
@@ -88,6 +92,14 @@ The included vault program is already deployed to devnet. To deploy your own:
    npm run dev
    ```
 
+## Architecture Notes
+
+- **Anchor stores:** asset listings, creator, pricing, license type, purchase/license proofs, and marketplace state.
+- **Pinata/IPFS stores:** `.glb` / `.gltf` model files and metadata JSON pointers referenced by on-chain `asset_id`.
+- **Frontend role:** wallet interaction, Pinata uploads, Anchor instruction calls, and rendering chain/IPFS data.
+- **No frontend persistence:** marketplace data and ownership come from Solana accounts and IPFS only.
+- **Seed safety:** Asset PDA derivation hashes `asset_id` with SHA-256 to satisfy Solana's 32-byte seed limit.
+
 ## Testing
 
 Tests use [LiteSVM](https://github.com/LiteSVM/litesvm), a fast lightweight Solana VM for testing.
@@ -97,7 +109,7 @@ npm run anchor-build   # Build the program first
 npm run anchor-test    # Run tests
 ```
 
-The tests are in `anchor/programs/vault/src/tests.rs` and automatically use the program ID from `declare_id!`.
+The tests are in `anchor/programs/marketplace/src/tests.rs` and automatically use the program ID from `declare_id!`.
 
 ## Regenerating the Client
 
@@ -109,6 +121,19 @@ npm run setup   # Or: npm run anchor-build && npm run codama:js
 
 This uses [Codama](https://github.com/codama-idl/codama) to generate a type-safe client from the Anchor IDL.
 
+## Environment
+
+Create your local environment file:
+
+```bash
+cp .env.example .env
+```
+
+Required variables:
+
+- `VITE_PINATA_JWT` - Pinata JWT used by upload helpers
+- `VITE_PINATA_GATEWAY` - preferred IPFS gateway hostname/base URL
+
 ## Learn More
 
 - [Solana Docs](https://solana.com/docs) - core concepts and guides
@@ -116,3 +141,4 @@ This uses [Codama](https://github.com/codama-idl/codama) to generate a type-safe
 - [Deploying Programs](https://solana.com/docs/programs/deploying) - deployment guide
 - [framework-kit](https://github.com/solana-foundation/framework-kit) - the React hooks used here
 - [Codama](https://github.com/codama-idl/codama) - client generation from IDL
+- [Pinata Docs](https://docs.pinata.cloud/) - uploading files and gateway access
